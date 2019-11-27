@@ -6,7 +6,7 @@ mod x64data;
 
 use crate::State;
 use crate::arch::Arch;
-use crate::common::{Size, Stmt, Jump, emit_error_at};
+use crate::common::{Size, Stmt, Jump};
 
 #[cfg(feature = "dynasm_opmap")]
 pub use debug::create_opmap;
@@ -28,10 +28,19 @@ pub struct Archx64 {
     features: x64data::Features
 }
 
+pub struct InstructionX64 {
+    inst: ast::Instruction,
+    args: Vec<ast::RawArg>,
+}
+
 impl Default for Archx64 {
     fn default() -> Archx64 {
         Archx64 { features: x64data::Features::all() }
     }
+}
+
+pub trait AssembleX64 {
+    fn compile_instruction(&mut self, _: InstructionX64) -> parse::Result<()> {
 }
 
 impl Arch for Archx64 {
@@ -39,13 +48,13 @@ impl Arch for Archx64 {
         "x64"
     }
 
-    fn set_features(&mut self, features: &[&str]) {
+    fn set_features(&mut self, features: &[String]) {
         let mut new_features = x64data::Features::empty();
         for ident in features {
             new_features |= match x64data::Features::from_str(&ident.to_string()) {
                 Some(feature) => feature,
                 None => {
-                    emit_error_at(ident.span(), format!("Architecture x64 does not support feature '{}'", ident.to_string()));
+                    eprintln!("Architecture x64 does not support feature '{}'", ident.to_string());
                     continue;
                 }
             }

@@ -1,9 +1,4 @@
-use syn::spanned::Spanned;
-use proc_macro2::{Span, TokenTree};
-use quote::{quote_spanned};
-
-use crate::common::{Stmt, Size, Jump, JumpKind, delimited, emit_error_at};
-use crate::serialize;
+use crate::common::{Stmt, Size, Jump, JumpKind};
 
 use super::{Context, X86Mode};
 use super::ast::{RawArg, CleanArg, SizedArg, Instruction, MemoryRefItem, Register, RegKind, RegFamily, RegId};
@@ -597,7 +592,6 @@ fn clean_memoryref(arg: RawArg) -> Result<CleanArg, Option<String>> {
 
             // finalize the memoryref
             CleanArg::Indirect {
-                span,
                 nosplit,
                 size: value_size,
                 disp_size,
@@ -606,7 +600,7 @@ fn clean_memoryref(arg: RawArg) -> Result<CleanArg, Option<String>> {
                 disp,
             }
         },
-        RawArg::TypeMappedRaw {span, base_reg, scale, value_size, nosplit, disp_size, scaled_items, attribute} => {
+        RawArg::TypeMappedRaw {base_reg, scale, value_size, nosplit, disp_size, scaled_items, attribute} => {
             let base = base_reg;
 
             // collect registers / displacements
@@ -679,7 +673,6 @@ fn clean_memoryref(arg: RawArg) -> Result<CleanArg, Option<String>> {
 
             // finalize the memoryref
             CleanArg::Indirect {
-                span,
                 nosplit,
                 size: value_size,
                 disp_size,
@@ -700,7 +693,7 @@ fn sanitize_indirects_and_sizes(ctx: &Context, args: &mut [CleanArg]) -> Result<
 
     for arg in args.iter_mut() {
         match *arg {
-            CleanArg::Indirect {span, nosplit, ref mut disp_size, ref mut base, ref mut index, ref disp, ..} => {
+            CleanArg::Indirect {nosplit, ref mut disp_size, ref mut base, ref mut index, ref disp, ..} => {
 
                 if encountered_indirect {
                     emit_error_at(span, "Multiple memory references in a single instruction".into())
@@ -708,7 +701,7 @@ fn sanitize_indirects_and_sizes(ctx: &Context, args: &mut [CleanArg]) -> Result<
                 encountered_indirect = true;
 
                 // figure out the effective address size and error on impossible combinations
-                addr_size = sanitize_indirect(ctx, span, nosplit, base, index)?;
+                addr_size = sanitize_indirect(ctx, nosplit, base, index)?;
 
                 if let Some((_, scale, _)) = *index {
                     if encode_scale(scale).is_none() {

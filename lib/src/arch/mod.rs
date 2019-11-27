@@ -1,17 +1,15 @@
-use crate::common::{Size, Stmt, Jump, emit_error_at};
-use crate::State;
+use crate::common::{Size, Stmt, Jump};
 
 use std::fmt::Debug;
 
-// pub mod x64;
+pub mod x64;
 // pub mod aarch64;
 
-pub(crate) trait Arch : Debug + Send {
+pub(crate) trait Arch: Debug + Send {
     fn name(&self) -> &str;
     fn set_features(&mut self, features: &[String]);
     fn handle_static_reloc(&self, stmts: &mut Vec<Stmt>, reloc: Jump, size: Size);
     fn default_align(&self) -> u8;
-    fn compile_instruction(&self, state: &mut State, input: parse::ParseStream) -> Result<(), Error>;
 }
 
 pub struct Error {
@@ -33,24 +31,18 @@ impl Arch for DummyArch {
         self.name
     }
 
-    fn set_features(&mut self, features: &[syn::Ident]) {
+    fn set_features(&mut self, features: &[String]) {
         if let Some(feature) = features.first() {
-            emit_error_at(feature.span(), "Cannot set features when the assembling architecture is undefined. Define it using a .arch directive".into());
+            eprintln!("Cannot set features when the assembling architecture is undefined. Define it using a .arch directive");
         }
     }
 
-    fn handle_static_reloc(&self, _stmts: &mut Vec<Stmt>, reloc: Jump, _size: Size) {
-        let span = reloc.span();
-        emit_error_at(span, "Current assembling architecture is undefined. Define it using a .arch directive".into());
+    fn handle_static_reloc(&self, _stmts: &mut Vec<Stmt>, _reloc: Jump, _size: Size) {
+        eprintln!("Current assembling architecture is undefined. Define it using a .arch directive");
     }
 
     fn default_align(&self) -> u8 {
         0
-    }
-
-    fn compile_instruction(&self, _state: &mut State, input: parse::ParseStream) -> parse::Result<()> {
-        emit_error_at(input.cursor().span(), "Current assembling architecture is undefined. Define it using a .arch directive".into());
-        Ok(())
     }
 }
 

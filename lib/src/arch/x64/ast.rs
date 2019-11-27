@@ -1,7 +1,4 @@
-use syn;
-use proc_macro2::Span;
-
-use crate::common::{Size, Jump};
+use crate::common::{Expr, Ident, Jump, Size};
 
 use std::cmp::PartialEq;
 
@@ -23,7 +20,7 @@ pub struct Register {
 #[derive(Debug, Clone)]
 pub enum RegKind {
     Static(RegId),
-    Dynamic(RegFamily, syn::Expr)
+    Dynamic(RegFamily, Expr),
 }
 
 // this map identifies the different registers that exist. some of these can be referred to as different sizes
@@ -95,7 +92,7 @@ impl Register {
         Register {size, kind: RegKind::Static(id) }
     }
 
-    pub fn new_dynamic(size: Size, family: RegFamily, id: syn::Expr) -> Register {
+    pub fn new_dynamic(size: Size, family: RegFamily, id: Expr) -> Register {
         Register {size, kind: RegKind::Dynamic(family, id) }
     }
 
@@ -244,7 +241,7 @@ impl RegId {
 pub enum MemoryRefItem {
     ScaledRegister(Register, isize),
     Register(Register),
-    Displacement(syn::Expr)
+    Displacement(Expr)
 }
 
 /**
@@ -255,18 +252,16 @@ pub enum MemoryRefItem {
 pub enum RawArg {
     // unprocessed typemapped argument
     TypeMappedRaw {
-        span: Span,
         nosplit: bool,
         value_size: Option<Size>,
         disp_size: Option<Size>,
         base_reg: Register,
-        scale: syn::Path,
+        scale: Scale,
         scaled_items: Vec<MemoryRefItem>,
-        attribute: Option<syn::Ident>,
+        attribute: Option<Ident>,
     },
     // unprocessed memory reference argument
     IndirectRaw {
-        span: Span,
         nosplit: bool,
         value_size: Option<Size>,
         disp_size: Option<Size>,
@@ -274,7 +269,6 @@ pub enum RawArg {
     },
     // direct register reference, 
     Direct {
-        span: Span,
         reg: Register
     },
     // a jump offset, i.e. ->foo
@@ -289,7 +283,7 @@ pub enum RawArg {
     },
     // just an arbitrary expression
     Immediate {
-        value: syn::Expr,
+        value: Expr,
         size: Option<Size>
     },
     // used to not block the parser on a parsing error in a single arg
@@ -300,17 +294,15 @@ pub enum RawArg {
 pub enum CleanArg {
     // memory reference
     Indirect {
-        span: Span,
         nosplit: bool,
         size: Option<Size>,
         disp_size: Option<Size>,
         base: Option<Register>,
-        index: Option<(Register, isize, Option<syn::Expr>)>,
-        disp: Option<syn::Expr>
+        index: Option<(Register, isize, Option<Expr>)>,
+        disp: Option<Expr>
     },
     // direct register reference, 
     Direct {
-        span: Span,
         reg: Register
     },
     // a jump offset, i.e. ->foo
@@ -325,7 +317,7 @@ pub enum CleanArg {
     },
     // just an arbitrary expression
     Immediate {
-        value: syn::Expr,
+        value: Expr,
         size: Option<Size>
     }
 }
@@ -335,15 +327,13 @@ pub enum SizedArg {
     // memory reference. size info is lost here as
     // it is never actually encoded
     Indirect {
-        span: Span,
         disp_size: Option<Size>,
         base: Option<Register>,
-        index: Option<(Register, isize, Option<syn::Expr>)>,
-        disp: Option<syn::Expr>
+        index: Option<(Register, isize, Option<Expr>)>,
+        disp: Option<Expr>
     },
     // direct register reference, 
     Direct {
-        span: Span,
         reg: Register
     },
     // a jump offset, i.e. ->foo
@@ -357,9 +347,16 @@ pub enum SizedArg {
     },
     // just an arbitrary expression
     Immediate {
-        value: syn::Expr,
         size: Size
     }
+}
+
+#[derive(Debug)]
+pub enum Scale {
+    One,
+    Two,
+    Four,
+    Eight,
 }
 
 /**
@@ -367,6 +364,5 @@ pub enum SizedArg {
  */
 
 pub struct Instruction {
-    pub span: Span,
-    pub idents: Vec<syn::Ident>
+    pub idents: Vec<Ident>
 }
