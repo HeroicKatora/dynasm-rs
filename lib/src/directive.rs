@@ -1,143 +1,125 @@
 use std::collections::hash_map::Entry;
 
-use syn::parse;
-use syn::Token;
-use quote::quote;
-
-use crate::common::{Stmt, Size, delimited, emit_error_at};
+use crate::common::{Const, Expr, Stmt, Size, Value};
 use crate::arch;
 use crate::DynasmData;
-use crate::parse_helpers::ParseOptExt;
 
-pub(crate) fn evaluate_directive(file_data: &mut DynasmData, stmts: &mut Vec<Stmt>, input: parse::ParseStream) -> parse::Result<()> {
-    let directive: syn::Ident = input.parse()?;
+enum Directive {
+    /// Set the architcture.
+    Arch(String),
+    /// Activate an architecture feature, or none to remove all.
+    Feature(Vec<String>),
+    /// Directly add some inline data words.
+    Data(Size, Vec<Const>),
+    /// Add some byte directly to the assembled data.
+    Byte(Expr),
+    /// Perform an alignment.
+    Align {
+        value: Expr,
+        with: Option<Expr>,
+    },
+    Alias {
+        /// The alias to use.
+        alias: String,
+        /// The target register which is given an alias.
+        reg: String,
+    },
+    /// A direct expression to add as bytes to the output.
+    Expr(Expr),
+}
 
-    match directive.to_string().as_str() {
+enum MalformedDirectiveError {
+    /// The architecture that was set was not recognized.
+    UnknownArchitecture(String),
+
+    /// The feature at the index was unknown.
+    UnknownFeature {
+        /// The index, to match to an input span for example.
+        idx: usize,
+        /// The bad feature.
+        what: String,
+    },
+
+    DuplicateAlias {
+        /// The name that has already been aliased.
+        reused: String,
+    },
+
+    /// Not a recognized directive.
+    UnknownDirective,
+}
+
+pub(crate) fn evaluate_directive(file_data: &mut DynasmData, stmts: &mut Vec<Stmt>, directive: &Directive)
+    -> Result<(), MalformedDirectiveError>
+{
+    match directive {
         // TODO: oword, qword, float, double, long double
-
-        "arch" => {
+        Directive::Arch(arch) => {
             // ; .arch ident
-            let arch: syn::Ident = input.parse()?;
-            if let Some(a) = arch::from_str(arch.to_string().as_str()) {
+            if let Some(a) = arch::from_str(&arch) {
                 file_data.current_arch = a;
             } else {
-                emit_error_at(arch.span(), format!("Unknown architecture '{}'", arch.to_string()));
+                return Err(MalformedDirectiveError::UnknownArchitecture(arch.to_string()));
             }
         },
-        "feature" => {
-            // ; .feature ident ("," ident) *
-            let mut features = Vec::new();
-            let ident: syn::Ident = input.parse()?;
-            features.push(ident);
-
-            while input.peek(Token![,]) {
-                let _: Token![,] = input.parse()?;
-                let ident: syn::Ident = input.parse()?;
-                features.push(ident);
-            }
-
+        Directive::Feature(features) => {
             // ;.feature none  cancels all features
             if features.len() == 1 && features[0] == "none" {
                 features.pop();
             }
+
             file_data.current_arch.set_features(&features);
         },
         // ; .byte (expr ("," expr)*)?
-        "byte"  => directive_const(file_data, stmts, input, Size::BYTE)?,
-        "word"  => directive_const(file_data, stmts, input, Size::WORD)?,
-        "dword" => directive_const(file_data, stmts, input, Size::DWORD)?,
-        "qword" => directive_const(file_data, stmts, input, Size::QWORD)?,
-        "bytes" => {
-            // ; .bytes expr
-            let iterator: syn::Expr = input.parse()?;
-            stmts.push(Stmt::ExprExtend(delimited(iterator)));
+        Directive::Data(size, consts) => {
+            directive_const(file_data, stmts, &consts, *size);
         },
-        "align" => {
+        Directive::Byte(expr) => {
+            // ; .bytes expr
+            stmts.push(Stmt::ExprExtend(expr));
+        },
+        Directive::Align { value, with } => {
             // ; .align expr ("," expr)
-            // this might need to be architecture dependent
-            let value: syn::Expr = input.parse()?;
-
-            let with = if input.peek(Token![,]) {
-                let _: Token![,] = input.parse()?;
-                let with: syn::Expr = input.parse()?;
-                delimited(with)
+            let with = if let Some(with) = with {
+                Value::Expr(*with)
             } else {
                 let with = file_data.current_arch.default_align();
-                delimited(quote!(#with))
+                Value::Byte(with)
             };
 
-            stmts.push(Stmt::Align(delimited(value), with));
+            stmts.push(Stmt::Align(*value, with));
         },
-        "alias" => {
+        Directive::Alias { alias, reg, } => {
             // ; .alias ident, ident
-            // consider changing this to ; .alias ident = ident next breaking change
-            let alias = input.parse::<syn::Ident>()?;
-            let _: Token![,] = input.parse()?;
-            let reg = input.parse::<syn::Ident>()?;
-
-            let alias_name = alias.to_string();
-
-            match file_data.aliases.entry(alias_name) {
+            match file_data.aliases.entry(alias.clone()) {
                 Entry::Occupied(_) => {
-                    emit_error_at(alias.span(), format!("Duplicate alias definition, alias '{}' was already defined", alias.to_string()));
+                    return Err(MalformedDirectiveError::DuplicateAlias {
+                        reused: alias.clone(),
+                    });
                 },
                 Entry::Vacant(v) => {
-                    v.insert(reg.to_string());
+                    v.insert(reg.clone());
                 }
             }
         },
         d => {
             // unknown directive. skip ahead until we hit a ; so the parser can recover
-            emit_error_at(directive.span(), format!("unknown directive '{}'", d));
-            skip_until_semicolon(input);
+            return Err(MalformedDirectiveError::UnknownDirective);
         }
     }
 
     Ok(())
 }
 
-fn directive_const(file_data: &mut DynasmData, stmts: &mut Vec<Stmt>, input: parse::ParseStream, size: Size) -> parse::Result<()> {
-    // FIXME: this could be replaced by a Punctuated parser?
-    // parse (expr (, expr)*)?
-
-    if input.is_empty() || input.peek(Token![;]) {
-        return Ok(())
-    }
-
-    if let Some(jump) = input.parse_opt()? {
-        file_data.current_arch.handle_static_reloc(stmts, jump, size);
-    } else {
-        let expr: syn::Expr = input.parse()?;
-        stmts.push(Stmt::ExprSigned(delimited(expr), size));
-    }
-
-
-    while input.peek(Token![,]) {
-        let _: Token![,] = input.parse()?;
-
-        if let Some(jump) = input.parse_opt()? {
-            file_data.current_arch.handle_static_reloc(stmts, jump, size);
-        } else {
-            let expr: syn::Expr = input.parse()?;
-            stmts.push(Stmt::ExprSigned(delimited(expr), size));
+fn directive_const(file_data: &mut DynasmData, stmts: &mut Vec<Stmt>, values: &[Const], size: Size) {
+    for value in values {
+        match value {
+            Const::Relocate(jump) => {
+                file_data.current_arch.handle_static_reloc(stmts, *jump, size);
+            },
+            Const::Value(expr) => {
+                stmts.push(Stmt::ExprSigned(expr, size));
+            },
         }
     }
-
-    Ok(())
-}
-
-/// In case a directive is unknown, try to skip up to the next ; and resume parsing. 
-fn skip_until_semicolon(input: parse::ParseStream) {
-    let _ = input.step(|cursor| {
-        let mut rest = *cursor;
-        while let Some((tt, next)) = rest.token_tree() {
-            match tt {
-                ::proc_macro2::TokenTree::Punct(ref punct) if punct.as_char() == ';' => {
-                    return Ok(((), rest));
-                }
-                _ => rest = next,
-            }
-        }
-        Ok(((), rest))
-    });
 }

@@ -33,6 +33,15 @@ impl Size {
     }
 }
 
+/// A value in a list of constants.
+pub enum Const {
+    /// Add constant through applying some relocation.
+    Relocate(Jump),
+
+    /// Add a simple value.
+    Value(Expr),
+}
+
 /**
  * Jump types
  */
@@ -104,7 +113,9 @@ pub enum Stmt {
     // extend the instruction stream with unsigned bytes
     ExprExtend(TokenTree),
     // align the instruction stream to some alignment
-    Align(TokenTree, TokenTree),
+    // the second is the actual alignment and might be a platform default, hence computed by the
+    // assembler library itself instead of a user defined expression.
+    Align(Expr, Value),
 
     // label declarations
     GlobalLabel(Ident),
@@ -122,11 +133,15 @@ pub enum Stmt {
     Stmt(TokenTree),
 }
 
+/// A value that is specifically for jump offset use.
+/// Slightly more specialized than `Value` since the only non-computed value is if elided.
+#[derive(Debug, Clone, Copy)]
 pub enum JumpOffset {
     Zero,
     Injected(Expr),
 }
 
+/// An identifier.
 #[derive(Debug, Clone)]
 pub struct Ident {
     pub name: String,
@@ -136,6 +151,18 @@ pub struct Ident {
 #[derive(Debug, Clone, Copy)]
 pub struct Expr {
     pub idx: usize,
+}
+
+/// A dynamically or statically computed value.
+///
+/// To produce valid binary it is mostly only important to know the correct width of the output but
+/// the value itself can be computed by the caller. This allows freedom on parsing without
+/// requiring the assembler core (this library) to implement an arbitrary expression evaluator. In
+/// particular, the evaluation can even be further delayed by the caller and left to `rustc`.
+#[derive(Debug, Clone, Copy)]
+pub enum Value {
+    Byte(u8),
+    Expr(Expr),
 }
 
 // convenience methods
@@ -180,7 +207,7 @@ impl From<Option<Expr>> for JumpOffset {
 }
 
 impl From<Expr> for JumpOffset {
-    fn from(val: Option<Expr>) -> JumpOffset {
-        expr => JumpOffset::Injected(expr),
+    fn from(expr: Expr) -> JumpOffset {
+        JumpOffset::Injected(expr)
     }
 }

@@ -3,8 +3,8 @@ use crate::State;
 
 use std::fmt::Debug;
 
-pub mod x64;
-pub mod aarch64;
+// pub mod x64;
+// pub mod aarch64;
 
 pub(crate) trait Arch : Debug + Send {
     fn name(&self) -> &str;
@@ -12,10 +12,6 @@ pub(crate) trait Arch : Debug + Send {
     fn handle_static_reloc(&self, stmts: &mut Vec<Stmt>, reloc: Jump, size: Size);
     fn default_align(&self) -> u8;
     fn compile_instruction(&self, state: &mut State, input: parse::ParseStream) -> Result<(), Error>;
-}
-
-struct Ident {
-    pub name: String,
 }
 
 pub struct Error {
@@ -60,9 +56,9 @@ impl Arch for DummyArch {
 
 pub(crate) fn from_str(s: &str) -> Option<Box<dyn Arch>> {
     match s {
-        "x64" => Some(Box::new(x64::Archx64::default())),
-        "x86" => Some(Box::new(x64::Archx86::default())),
-        "aarch64" => Some(Box::new(aarch64::ArchAarch64::default())),
+        // "x64" => Some(Box::new(x64::Archx64::default())),
+        // "x86" => Some(Box::new(x64::Archx86::default())),
+        // "aarch64" => Some(Box::new(aarch64::ArchAarch64::default())),
         "unknown" => Some(Box::new(DummyArch::new("unknown"))),
         _ => None
     }
