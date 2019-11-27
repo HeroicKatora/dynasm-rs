@@ -1,22 +1,8 @@
-#![feature(proc_macro_diagnostic)]
-#![feature(proc_macro_span)]
-
-// token/ast manipulation
-extern crate proc_macro;
-extern crate proc_macro2;
-extern crate syn;
-extern crate quote;
-
 // utility
 extern crate lazy_static;
 extern crate bitflags;
 extern crate owning_ref;
 extern crate byteorder;
-
-use syn::parse;
-use syn::{Token, parse_macro_input};
-use proc_macro2::{Span, TokenTree, TokenStream};
-use quote::quote;
 
 use lazy_static::lazy_static;
 use owning_ref::{OwningRef, RwLockReadGuardRef};
@@ -35,17 +21,6 @@ mod directive;
 mod serialize;
 /// Module containing utility functions for parsing
 mod parse_helpers;
-
-/// The whole point
-#[proc_macro]
-pub fn dynasm(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    // try parsing the tokenstream into a dynasm struct containing
-    // an abstract representation of the statements to create
-    let dynasm = parse_macro_input!(tokens as Dynasm);
-
-    // serialize the resulting output into tokens
-    serialize::serialize(&dynasm.target, dynasm.stmts).into()
-}
 
 /// output from parsing a full dynasm invocation. target represents the first dynasm argument, being the assembler
 /// variable being used. stmts contains an abstract representation of the statements to be generated from this dynasm

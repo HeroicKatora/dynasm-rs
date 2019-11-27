@@ -1,0 +1,23 @@
+[package]
+name = "dynasm-asm"
+version = "0.5.2"
+authors = ["Alexander Stocko <as@coder.gg>", "CensoredUsername <cens.username@gmail.com>", "HeroicKatora <andreas.molzer@gmx.de>"]
+
+description = "A pure rust assembler. Used within the dynasm to write JIT compilers easily."
+
+documentation = "https://censoredusername.github.io/dynasm-rs/plugin/dynasm/index.html"
+repository = "https://github.com/CensoredUsername/dynasm-rs"
+
+readme = "../README.md"
+keywords = ["jit", "dynasm", "dynasmrt", "dynasm-rs", "assembler"]
+license = "MPL-2.0"
+edition = "2018"
+
+[lib]
+name = "dynasm"
+
+[dependencies]
+lazy_static = "^1.4"
+bitflags = "^1.1"
+owning_ref = "^0.4"
+byteorder = "^1.3"

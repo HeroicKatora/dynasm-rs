@@ -1,5 +1,3 @@
-use syn::parse;
-
 use crate::common::{Size, Stmt, Jump, emit_error_at};
 use crate::State;
 
@@ -10,10 +8,17 @@ pub mod aarch64;
 
 pub(crate) trait Arch : Debug + Send {
     fn name(&self) -> &str;
-    fn set_features(&mut self, features: &[syn::Ident]);
+    fn set_features(&mut self, features: &[String]);
     fn handle_static_reloc(&self, stmts: &mut Vec<Stmt>, reloc: Jump, size: Size);
     fn default_align(&self) -> u8;
-    fn compile_instruction(&self, state: &mut State, input: parse::ParseStream) -> parse::Result<()>;
+    fn compile_instruction(&self, state: &mut State, input: parse::ParseStream) -> Result<(), Error>;
+}
+
+struct Ident {
+    pub name: String,
+}
+
+pub struct Error {
 }
 
 #[derive(Clone, Debug)]

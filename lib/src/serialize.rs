@@ -1,9 +1,3 @@
-use syn;
-use syn::parse;
-use syn::spanned::Spanned;
-use proc_macro2::{Span, TokenStream, TokenTree};
-use quote::{quote, quote_spanned, ToTokens};
-
 use byteorder::{ByteOrder, LittleEndian};
 
 use crate::common::{Size, Stmt, delimited};
@@ -121,12 +115,6 @@ pub fn serialize(name: &TokenTree, stmts: Vec<Stmt>) -> TokenStream {
 // expression of value 0. sometimes needed.
 pub fn expr_zero() -> TokenTree {
     proc_macro2::Literal::u8_unsuffixed(0).into()
-}
-
-// given an ident, makes it into a "string"
-pub fn expr_string_from_ident(i: &syn::Ident) -> TokenTree {
-    let name = i.to_string();
-    proc_macro2::Literal::string(&name).into()
 }
 
 // 

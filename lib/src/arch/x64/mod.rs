@@ -1,5 +1,3 @@
-use syn::parse;
-
 mod ast;
 mod compiler;
 mod parser;
@@ -41,7 +39,7 @@ impl Arch for Archx64 {
         "x64"
     }
 
-    fn set_features(&mut self, features: &[syn::Ident]) {
+    fn set_features(&mut self, features: &[&str]) {
         let mut new_features = x64data::Features::empty();
         for ident in features {
             new_features |= match x64data::Features::from_str(&ident.to_string()) {
