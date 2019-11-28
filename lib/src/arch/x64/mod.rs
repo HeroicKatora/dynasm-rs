@@ -5,7 +5,7 @@ mod debug;
 mod x64data;
 
 use crate::State;
-use crate::arch::Arch;
+use crate::arch::{Arch, Error, BasicExprBuilder};
 use crate::common::{Size, Stmt, Jump};
 
 #[cfg(feature = "dynasm_opmap")]
@@ -25,12 +25,22 @@ struct Context<'a, 'b: 'a> {
 
 #[derive(Clone, Debug)]
 pub struct Archx64 {
-    features: x64data::Features
+    features: x64data::Features,
+}
+
+#[derive(Clone, Debug)]
+pub struct Archx86 {
+    features: x64data::Features,
 }
 
 pub struct InstructionX64 {
-    inst: ast::Instruction,
-    args: Vec<ast::RawArg>,
+    pub inst: ast::Instruction,
+    pub args: Vec<ast::RawArg>,
+}
+
+pub struct InstructionX86 {
+    pub inst: ast::Instruction,
+    pub args: Vec<ast::RawArg>,
 }
 
 impl Default for Archx64 {
@@ -39,8 +49,32 @@ impl Default for Archx64 {
     }
 }
 
+impl Default for Archx86 {
+    fn default() -> Archx86 {
+        Archx86 { features: x64data::Features::all() }
+    }
+}
+
 pub trait AssembleX64 {
-    fn compile_instruction(&mut self, _: InstructionX64) -> parse::Result<()> {
+    /// Turn an expression into binary format.
+    /// May error when dynamic data is present at bad locations such as memory address scaling.
+    fn compile_instruction(&mut self, arch: &Archx64, _: InstructionX64) -> Result<(), Error>;
+
+    /// Create an instruction composed from dynamic data.
+    /// Only available when the type is also capable of building new composite expressions.
+    fn build_instruction(&mut self, arch: &Archx64, _: InstructionX64) -> Result<(), Error>
+        where Self: BasicExprBuilder;
+}
+
+pub trait AssembleX86 {
+    /// Turn an expression into binary format.
+    /// May error when dynamic data is present at bad locations such as memory address scaling.
+    fn compile_instruction(&mut self, arch: &Archx86, _: InstructionX86) -> Result<(), Error>;
+
+    /// Create an instruction composed from dynamic data.
+    /// Only available when the type is also capable of building new composite expressions.
+    fn build_instruction(&mut self, arch: &Archx86, _: InstructionX86) -> Result<(), Error>
+        where Self: BasicExprBuilder;
 }
 
 impl Arch for Archx64 {
@@ -72,31 +106,29 @@ impl Arch for Archx64 {
     fn default_align(&self) -> u8 {
         0x90
     }
+}
 
-    fn compile_instruction(&self, state: &mut State, input: parse::ParseStream) -> parse::Result<()> {
-        let mut ctx = Context {
-            state,
+impl AssembleX64 for State<'_> {
+    fn compile_instruction(&mut self, arch: &Archx64, instruction: InstructionX64) -> Result<(), Error> {
+        let InstructionX64 { inst, args } = instruction;
+
+        let context = Context {
+            state: self,
             mode: X86Mode::Long,
-            features: self.features
+            features: arch.features,
         };
-        let (instruction, args) = parser::parse_instruction(&mut ctx, input)?;
-        let span = instruction.span;
 
-        if let Err(Some(e)) = compiler::compile_instruction(&mut ctx, instruction, args) {
-            emit_error_at(span, e);
+        if let Err(Some(e)) = compiler::compile_instruction(context, inst, args) {
+            return Err(Error::emit_error_at(e));
         }
+
         Ok(())
     }
-}
 
-#[derive(Clone, Debug)]
-pub struct Archx86 {
-    features: x64data::Features
-}
-
-impl Default for Archx86 {
-    fn default() -> Archx86 {
-        Archx86 { features: x64data::Features::all() }
+    fn build_instruction(&mut self, arch: &Archx64, instruction: InstructionX64) -> Result<(), Error>
+        where Self: BasicExprBuilder
+    {
+        unreachable!("Statically uncallable")
     }
 }
 
@@ -105,13 +137,13 @@ impl Arch for Archx86 {
         "x86"
     }
 
-    fn set_features(&mut self, features: &[syn::Ident]) {
+    fn set_features(&mut self, features: &[String]) {
         let mut new_features = x64data::Features::empty();
         for ident in features {
             new_features |= match x64data::Features::from_str(&ident.to_string()) {
                 Some(feature) => feature,
                 None => {
-                    emit_error_at(ident.span(), format!("Architecture x86 does not support feature '{}'", ident.to_string()));
+                    eprintln!("Architecture x86 does not support feature '{}'", ident.to_string());
                     continue;
                 }
             }
@@ -129,19 +161,29 @@ impl Arch for Archx86 {
     fn default_align(&self) -> u8 {
         0x90
     }
+}
 
-    fn compile_instruction(&self, state: &mut State, input: parse::ParseStream) -> parse::Result<()> {
+impl AssembleX86 for State<'_> {
+    fn compile_instruction(&mut self, arch: &Archx86, instruction: InstructionX86) -> Result<(), Error> {
+        let InstructionX86 { inst, args } = instruction;
+
         let mut ctx = Context {
-            state,
+            state: self,
             mode: X86Mode::Protected,
-            features: self.features
+            features: arch.features,
         };
-        let (instruction, args) = parser::parse_instruction(&mut ctx, input)?;
-        let span = instruction.span;
 
-        if let Err(Some(e)) = compiler::compile_instruction(&mut ctx, instruction, args) {
-            emit_error_at(span, e);
+
+        if let Err(Some(e)) = compiler::compile_instruction(ctx, inst, args) {
+            return Err(Error::emit_error_at(e));
         }
+
         Ok(())
+    }
+
+    fn build_instruction(&mut self, arch: &Archx86, instruction: InstructionX86) -> Result<(), Error>
+        where Self: BasicExprBuilder
+    {
+        unreachable!("Statically uncallable")
     }
 }

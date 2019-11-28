@@ -1,4 +1,4 @@
-use crate::common::{Size, Stmt, Jump};
+use crate::common::{Expr, Jump, Size, Stmt, Value};
 
 use std::fmt::Debug;
 
@@ -12,8 +12,41 @@ pub(crate) trait Arch: Debug + Send {
     fn default_align(&self) -> u8;
 }
 
-pub struct Error {
+/// An environment that can dynamically build expressions from values.
+///
+/// These are used to integrate dynamic user expression into assembled code where values appear
+/// only in a modified form.
+pub trait BasicExprBuilder {
+    /// a | b
+    fn bit_or(&mut self, _: Expr, _: u64) -> Option<Expr>;
+    /// a & b
+    fn bit_and(&mut self, _: Expr, _: u64) -> Option<Expr>;
+    /// a ^ b
+    fn bit_xor(&mut self, _: Expr, _: u64) -> Option<Expr>;
+    /// !a
+    fn neg(&mut self, _: Expr) -> Option<Expr>;
+    /// Log2, mostly used to encode scalings.
+    fn log2(&mut self, _: Expr) -> Option<Expr>;
+    /// len*size
+    fn scaled(&mut self, len: Value, size: Value) -> Option<Expr>;
+    /// (v & mask) << shift
+    fn mask_shift(&mut self, _: Value, mask: u64, shift: i8) -> Option<Expr>;
 }
+
+pub enum Error {
+    BadArgument {
+        message: String,
+    },
+}
+
+impl Error {
+    fn emit_error_at(message: String) -> Self {
+        Error::BadArgument { message }
+    }
+}
+
+/// A `BasicExprBuilder` that is not capable of building any of the expressions.
+pub struct NoExpressionCombinators;
 
 #[derive(Clone, Debug)]
 pub struct DummyArch {
@@ -46,10 +79,20 @@ impl Arch for DummyArch {
     }
 }
 
+impl BasicExprBuilder for NoExpressionCombinators {
+    fn bit_or(&mut self, _: Expr, _: u64) -> Option<Expr> { None }
+    fn bit_and(&mut self, _: Expr, _: u64) -> Option<Expr> { None }
+    fn bit_xor(&mut self, _: Expr, _: u64) -> Option<Expr> { None }
+    fn neg(&mut self, _: Expr) -> Option<Expr> { None }
+    fn log2(&mut self, _: Expr) -> Option<Expr> { None }
+    fn scaled(&mut self, _: Value, _: Value) -> Option<Expr> { None }
+    fn mask_shift(&mut self, _: Value, _: u64, _: i8) -> Option<Expr> { None }
+}
+
 pub(crate) fn from_str(s: &str) -> Option<Box<dyn Arch>> {
     match s {
-        // "x64" => Some(Box::new(x64::Archx64::default())),
-        // "x86" => Some(Box::new(x64::Archx86::default())),
+        "x64" => Some(Box::new(x64::Archx64::default())),
+        "x86" => Some(Box::new(x64::Archx86::default())),
         // "aarch64" => Some(Box::new(aarch64::ArchAarch64::default())),
         "unknown" => Some(Box::new(DummyArch::new("unknown"))),
         _ => None

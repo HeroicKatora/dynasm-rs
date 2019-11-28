@@ -83,7 +83,7 @@ impl RelocationKind {
  * Implementation
  */
 
-pub(super) fn compile_instruction(ctx: &mut Context, instruction: Instruction, args: Vec<RawArg>) -> Result<(), Option<String>> {
+pub(super) fn compile_instruction(mut ctx: Context, instruction: Instruction, args: Vec<RawArg>) -> Result<(), Option<String>> {
     let mut ops = instruction.idents;
     let op = ops.pop().unwrap();
     let prefixes = ops;
