@@ -1,6 +1,7 @@
-use crate::common::{Expr, Jump, Size, Stmt, Value};
+use crate::State;
+use crate::common::{Expr, Jump, Size, Stmt};
 
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 
 pub mod x64;
 // pub mod aarch64;
@@ -17,6 +18,11 @@ pub(crate) trait Arch: Debug + Send {
 /// These are used to integrate dynamic user expression into assembled code where values appear
 /// only in a modified form.
 pub trait BasicExprBuilder {
+    /// Append a new statement.
+    fn push(&mut self, _: Stmt);
+    /// Emit an error message.
+    /// When any error is generated then the instruction compilation is expected to fail.
+    fn emit_error_at(&mut self, _: ErrorSpan, _: fmt::Arguments);
     /// a | b
     fn bit_or(&mut self, _: Expr, _: u64) -> Option<Expr>;
     /// a & b
@@ -27,16 +33,21 @@ pub trait BasicExprBuilder {
     fn neg(&mut self, _: Expr) -> Option<Expr>;
     /// Log2, mostly used to encode scalings.
     fn log2(&mut self, _: Expr) -> Option<Expr>;
-    /// len*size
-    fn scaled(&mut self, len: Value, size: Value) -> Option<Expr>;
-    /// (v & mask) << shift
-    fn mask_shift(&mut self, _: Value, mask: u64, shift: i8) -> Option<Expr>;
+    /// (val & mask) << shift
+    fn mask_shift(&mut self, val: Expr, mask: u64, shift: i8) -> Option<Expr>;
 }
 
 pub enum Error {
     BadArgument {
         message: String,
     },
+    BadExprCombinator {
+        expr: Expr,
+    },
+}
+
+/// An opaque description of an error origin.
+pub struct ErrorSpan {
 }
 
 impl Error {
@@ -45,8 +56,31 @@ impl Error {
     }
 }
 
-/// A `BasicExprBuilder` that is not capable of building any of the expressions.
-pub struct NoExpressionCombinators;
+pub trait BasicExprBuilderExt: BasicExprBuilder {
+    fn bit_or_else_err(&mut self, a: Expr, b: u64) -> Result<Expr, Error> {
+        self.bit_or(a, b).ok_or_else(|| Error::BadExprCombinator { expr: a })
+    }
+
+    fn bit_and_else_err(&mut self, a: Expr, b: u64) -> Result<Expr, Error> {
+        self.bit_and(a, b).ok_or_else(|| Error::BadExprCombinator { expr: a })
+    }
+
+    fn bit_xor_else_err(&mut self, a: Expr, b: u64) -> Result<Expr, Error> {
+        self.bit_xor(a, b).ok_or_else(|| Error::BadExprCombinator { expr: a })
+    }
+
+    fn neg_else_err(&mut self, a: Expr) -> Result<Expr, Error> {
+        self.neg(a).ok_or_else(|| Error::BadExprCombinator { expr: a })
+    }
+
+    fn log2_else_err(&mut self, a: Expr) -> Result<Expr, Error> {
+        self.log2(a).ok_or_else(|| Error::BadExprCombinator { expr: a })
+    }
+
+    fn mask_shift_else_err(&mut self, val: Expr, mask: u64, shift: i8) -> Result<Expr, Error> {
+        self.mask_shift(val, mask, shift).ok_or_else(|| Error::BadExprCombinator { expr: val })
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct DummyArch {
@@ -79,14 +113,43 @@ impl Arch for DummyArch {
     }
 }
 
-impl BasicExprBuilder for NoExpressionCombinators {
-    fn bit_or(&mut self, _: Expr, _: u64) -> Option<Expr> { None }
-    fn bit_and(&mut self, _: Expr, _: u64) -> Option<Expr> { None }
-    fn bit_xor(&mut self, _: Expr, _: u64) -> Option<Expr> { None }
-    fn neg(&mut self, _: Expr) -> Option<Expr> { None }
-    fn log2(&mut self, _: Expr) -> Option<Expr> { None }
-    fn scaled(&mut self, _: Value, _: Value) -> Option<Expr> { None }
-    fn mask_shift(&mut self, _: Value, _: u64, _: i8) -> Option<Expr> { None }
+/// A simple implementation of a `BasicExprBuilder`.
+///
+/// It can not combine any expressions, pushes statements into a `Vec` and emits errors onto
+/// standard error directly.
+impl BasicExprBuilder for State<'_> {
+    fn push(&mut self, stmt: Stmt) {
+        self.stmts.push(stmt)
+    }
+
+    /// Emits the error message on `stderr`.
+    fn emit_error_at(&mut self, _: ErrorSpan, args: fmt::Arguments) {
+        eprintln!("{}", args);
+    }
+
+    fn bit_or(&mut self, _: Expr, _: u64) -> Option<Expr> {
+        None 
+    }
+
+    fn bit_and(&mut self, _: Expr, _: u64) -> Option<Expr> {
+        None
+    }
+
+    fn bit_xor(&mut self, _: Expr, _: u64) -> Option<Expr> {
+        None
+    }
+
+    fn neg(&mut self, _: Expr) -> Option<Expr> {
+        None
+    }
+
+    fn log2(&mut self, _: Expr) -> Option<Expr> {
+        None
+    }
+
+    fn mask_shift(&mut self, _: Expr, _: u64, _: i8) -> Option<Expr> {
+        None
+    }
 }
 
 pub(crate) fn from_str(s: &str) -> Option<Box<dyn Arch>> {

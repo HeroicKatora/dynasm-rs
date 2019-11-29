@@ -17,8 +17,8 @@ pub enum X86Mode {
     Protected
 }
 
-struct Context<'a, 'b: 'a> {
-    pub state: &'a mut State<'b>,
+struct Context<'a> {
+    pub state: &'a mut dyn BasicExprBuilder,
     pub mode: X86Mode,
     pub features: x64data::Features
 }
