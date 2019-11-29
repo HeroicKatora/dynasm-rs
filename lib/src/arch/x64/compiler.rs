@@ -1,5 +1,5 @@
 use crate::common::{Expr, Ident, Stmt, Size, Jump, JumpKind, Value};
-use crate::arch::{BasicExprBuilderExt, Error};
+use crate::arch::{BasicExprBuilderExt, Error, ErrorSpan};
 
 use super::{Context, X86Mode};
 use super::ast::{RawArg, CleanArg, SizedArg, Instruction, MemoryRefItem, Register, RegKind, RegFamily, RegId};
@@ -89,10 +89,15 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
 {
     let mut ops = instruction.idents;
     let op = ops.pop().unwrap();
+    let op_span = ErrorSpan::InstructionPart { idx: ops.len() };
     let prefixes = ops;
 
     // Fold RawArgs into CleanArgs
-    let mut args = args.into_iter().map(|x| clean_memoryref(ctx, x)).collect::<Result<Vec<CleanArg>, _>>()?;
+    let mut args = args
+        .into_iter()
+        .enumerate()
+        .map(|(idx, x)| clean_memoryref(ctx, ErrorSpan::argument(idx), x))
+        .collect::<Result<Vec<CleanArg>, _>>()?;
 
     // sanitize memory references, determine address size, and size immediates/displacements if possible
     let addr_size = sanitize_indirects_and_sizes(ctx, &mut args)?;
@@ -111,7 +116,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
     };
 
     // find a matching op
-    let data = match_op_format(&mut ctx, &op.name, &args)?;
+    let data = match_op_format(&mut ctx, op_span, &op.name, &args)?;
 
     // determine if the features required for this op are fulfilled
     if !ctx.features.contains(data.features) {
@@ -313,7 +318,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
             }
 
             if let Some(disp) = disp {
-                ctx.state.push(Stmt::ExprSigned(delimited(disp), if mode == MOD_DISP8 {Size::BYTE} else {Size::DWORD}));
+                ctx.state.push(Stmt::ExprSigned(disp.into(), if mode == MOD_DISP8 {Size::BYTE} else {Size::DWORD}));
             } else if mode == MOD_DISP8 {
                 // no displacement was asked for, but we have to encode one as there's a base
                 ctx.state.push(Stmt::u8(0));
@@ -336,7 +341,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
             compile_modrm_sib(ctx, mode, reg_k, base_k);
 
             if let Some(disp) = disp {
-                ctx.state.push(Stmt::ExprSigned(delimited(disp), if mode == MOD_DISP8 {Size::BYTE} else {Size::WORD}));
+                ctx.state.push(Stmt::ExprSigned(disp.into(), if mode == MOD_DISP8 {Size::BYTE} else {Size::WORD}));
             } else if mode == MOD_DISP8 {
                 ctx.state.push(Stmt::u8(0));
             }
@@ -347,7 +352,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
 
             match ctx.mode {
                 X86Mode::Long => if let Some(disp) = disp {
-                    ctx.state.push(Stmt::ExprSigned(delimited(disp), Size::DWORD));
+                    ctx.state.push(Stmt::ExprSigned(disp.into(), Size::DWORD));
                 } else {
                     ctx.state.push(Stmt::u32(0))
                 },
@@ -355,8 +360,8 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
                     // x86 doesn't actually allow RIP-relative addressing
                     // but we can work around it with relocations
                     ctx.state.push(Stmt::u32(0));
-                    let disp = disp.unwrap_or_else(|| serialize::reparse(&serialize::expr_zero()).expect("Invalid expression generated"));
-                    relocations.push((Jump::new(JumpKind::Bare(disp), None), 0, Size::DWORD, RelocationKind::Absolute));
+                    // FIXME: that was somewhat hacky here, and the fix is hack too.
+                    relocations.push((Jump::new(JumpKind::Bare(Value::Byte(0)), None), 0, Size::DWORD, RelocationKind::Absolute));
                 },
             }
 
@@ -413,7 +418,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
 
             // Disp
             if let Some(disp) = disp {
-                ctx.state.push(Stmt::ExprSigned(delimited(disp), if mode == MOD_DISP8 {Size::BYTE} else {Size::DWORD}));
+                ctx.state.push(Stmt::ExprSigned(disp.into(), if mode == MOD_DISP8 {Size::BYTE} else {Size::DWORD}));
             } else if no_base {
                 ctx.state.push(Stmt::u32(0));
             } else if mode == MOD_DISP8 {
@@ -458,7 +463,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
         // first immediate byte.
         if !args.is_empty() {
             if let SizedArg::Immediate {value, size: Size::BYTE} = args.remove(0) {
-                byte = ctx.state.mask_shift_or(byte, value, 0xF, 0)?.into();
+                byte = ctx.state.mask_shift_or_else_err(byte, value, 0xF, 0)?.into();
             } else {
                 panic!("bad formatting data")
             }
@@ -473,7 +478,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
     for arg in args {
         match arg {
             SizedArg::Immediate {value, size} => {
-                ctx.state.push(Stmt::ExprSigned(delimited(value), size));
+                ctx.state.push(Stmt::ExprSigned(value, size));
 
                 // bump relocations
                 relocations.iter_mut().for_each(|r| r.1 += size.in_bytes());
@@ -514,7 +519,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
 }
 
 // Folds RawArgs into CleanArgs by analyzing the different raw memoryref variants
-fn clean_memoryref(ctx: &mut Context, arg: RawArg) -> Result<CleanArg, Error> {
+fn clean_memoryref(ctx: &mut Context, span: ErrorSpan, arg: RawArg) -> Result<CleanArg, Error> {
     Ok(match arg {
         RawArg::Direct {reg} => CleanArg::Direct {reg},
         RawArg::JumpTarget {jump, size} => CleanArg::JumpTarget {jump, size},
@@ -691,7 +696,8 @@ fn sanitize_indirects_and_sizes(ctx: &mut Context, args: &mut [CleanArg]) -> Res
     let mut addr_size = None;
     let mut encountered_indirect = false;
 
-    for arg in args.iter_mut() {
+    for (idx, arg) in args.iter_mut().enumerate() {
+        let span = ErrorSpan::argument(idx);
         match *arg {
             CleanArg::Indirect {nosplit, ref mut disp_size, ref mut base, ref mut index, ref disp, ..} => {
 
@@ -701,7 +707,7 @@ fn sanitize_indirects_and_sizes(ctx: &mut Context, args: &mut [CleanArg]) -> Res
                 encountered_indirect = true;
 
                 // figure out the effective address size and error on impossible combinations
-                addr_size = sanitize_indirect(ctx, nosplit, base, index)?;
+                addr_size = sanitize_indirect(ctx, span, nosplit, base, index)?;
 
                 if let Some((_, scale, _)) = *index {
                     if encode_scale(scale).is_none() {
@@ -744,7 +750,7 @@ fn sanitize_indirects_and_sizes(ctx: &mut Context, args: &mut [CleanArg]) -> Res
 
 /// Validates that the base/index combination can actually be encoded and returns the effective address size.
 /// If the address size can't be determined (purely displacement, or VSIB without base), the result is None.
-fn sanitize_indirect(ctx: &mut Context, nosplit: bool, base: &mut Option<Register>,
+fn sanitize_indirect(ctx: &mut Context, span: ErrorSpan, nosplit: bool, base: &mut Option<Register>,
                      index: &mut Option<(Register, isize, Option<Expr>)>) -> Result<Option<Size>, Error> 
 {
 
@@ -937,14 +943,14 @@ fn sanitize_indirect(ctx: &mut Context, nosplit: bool, base: &mut Option<Registe
     Ok(Some(size))
 }
 
-fn match_op_format(ctx: &Context, ident: &str, args: &[CleanArg]) -> Result<&'static Opdata, Error> {
+fn match_op_format(ctx: &Context, span: ErrorSpan, ident: &str, args: &[CleanArg]) -> Result<&'static Opdata, Error> {
     let name = ident.to_string();
     let name = name.as_str();
 
     let data = if let Some(data) = get_mnemnonic_data(name) {
         data
     } else {
-        ctx.state.emit_error_at(ident.span(), format_args!("'{}' is not a valid instruction", name));
+        ctx.state.emit_error_at(span, format_args!("'{}' is not a valid instruction", name));
         return Err(Error::UndiagnosedError);
     };
 
@@ -1232,32 +1238,33 @@ fn get_legacy_prefixes(ctx: &mut Context, fmt: &'static Opdata, idents: Vec<Iden
     let mut group1 = None;
     let mut group2 = None;
 
-    for prefix in idents {
+    for (idx, prefix) in idents.into_iter().enumerate() {
+        let span = ErrorSpan::InstructionPart { idx };
         let (group, value) = match prefix.name.as_str() {
             "rep"   => if fmt.flags.contains(Flags::REP) {
                 (&mut group1, 0xF3)
             } else {
-                ctx.state.emit_error_at(prefix.span(), format_args!("Cannot use prefix {} on this instruction", name));
+                ctx.state.emit_error_at(span, format_args!("Cannot use prefix {} on this instruction", prefix.name));
                 return Err(Error::UndiagnosedError);
             },
             "repe"  |
             "repz"  => if fmt.flags.contains(Flags::REPE) {
                 (&mut group1, 0xF3)
             } else {
-                ctx.state.emit_error_at(prefix.span(), format_args!("Cannot use prefix {} on this instruction", name));
+                ctx.state.emit_error_at(span, format_args!("Cannot use prefix {} on this instruction", prefix.name));
                 return Err(Error::UndiagnosedError);
             },
             "repnz" |
             "repne" => if fmt.flags.contains(Flags::REP) {
                 (&mut group1, 0xF2)
             } else {
-                ctx.state.emit_error_at(prefix.span(), format_args!("Cannot use prefix {} on this instruction", name));
+                ctx.state.emit_error_at(span, format_args!("Cannot use prefix {} on this instruction", prefix.name));
                 return Err(Error::UndiagnosedError);
             },
             "lock"  => if fmt.flags.contains(Flags::LOCK) {
                 (&mut group1, 0xF0)
             } else {
-                ctx.state.emit_error_at(prefix.span(), format_args!("Cannot use prefix {} on this instruction", name));
+                ctx.state.emit_error_at(span, format_args!("Cannot use prefix {} on this instruction", prefix.name));
                 return Err(Error::UndiagnosedError);
             },
             "ss"    => (&mut group2, 0x36),
@@ -1269,7 +1276,7 @@ fn get_legacy_prefixes(ctx: &mut Context, fmt: &'static Opdata, idents: Vec<Iden
             _       => panic!("unimplemented prefix")
         };
         if group.is_some() {
-            ctx.state.emit_error_at(prefix.span(), format_args!("Duplicate prefix group"));
+            ctx.state.emit_error_at(span, format_args!("Duplicate prefix group"));
             return Err(Error::UndiagnosedError);
         }
         *group = Some(value);
@@ -1616,7 +1623,7 @@ fn compile_modrm_sib(ctx: &mut Context, mode: u8, reg1: RegKind, reg2: RegKind)
     Ok(())
 }
 
-fn compile_sib_dynscale(ctx: &mut Context, scale: u8, scale: Expr, reg1: RegKind, reg2: RegKind)
+fn compile_sib_dynscale(ctx: &mut Context, scale: u8, scale_expr: Expr, reg1: RegKind, reg2: RegKind)
     -> Result<(), Error>
 {
     let byte = (reg1.encode()  & 7) << 3 |

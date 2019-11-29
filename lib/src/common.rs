@@ -60,7 +60,7 @@ pub enum JumpKind {
     Backward(Ident), //  > label (["+" "-"] offset)?
     Forward(Ident),  //  < label (["+" "-"] offset)?
     Dynamic(Expr),   // =>expr | => (expr) (["+" "-"] offset)?
-    Bare(Expr)       // jump to this address
+    Bare(Value)      // jump to this address
 }
 
 impl Jump {
@@ -125,7 +125,7 @@ pub enum Stmt {
 #[derive(Debug, Clone, Copy)]
 pub enum JumpOffset {
     Zero,
-    Injected(Expr),
+    Injected(Value),
 }
 
 /// An identifier.
@@ -198,20 +198,26 @@ impl From<Option<Expr>> for JumpOffset {
     fn from(val: Option<Expr>) -> JumpOffset {
         match val {
             None => JumpOffset::Zero,
-            Some(expr) => JumpOffset::Injected(expr),
+            Some(expr) => JumpOffset::Injected(expr.into()),
         }
     }
 }
 
 impl From<Expr> for JumpOffset {
     fn from(expr: Expr) -> JumpOffset {
-        JumpOffset::Injected(expr)
+        JumpOffset::Injected(expr.into())
+    }
+}
+
+impl From<Value> for JumpOffset {
+    fn from(val: Value) -> JumpOffset {
+        JumpOffset::Injected(val)
     }
 }
 
 impl From<&'_ Expr> for JumpOffset {
     fn from(expr: &'_ Expr) -> JumpOffset {
-        JumpOffset::Injected(*expr)
+        JumpOffset::Injected((*expr).into())
     }
 }
 

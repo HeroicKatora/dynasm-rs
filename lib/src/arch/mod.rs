@@ -54,12 +54,28 @@ pub enum Error {
 }
 
 /// An opaque description of an error origin.
-pub struct ErrorSpan {
+pub enum ErrorSpan {
+    InstructionPart {
+        idx: usize,
+    },
+    Argument {
+        idx: usize,
+    },
 }
 
 impl Error {
     fn emit_error_at(message: String) -> Self {
         Error::BadArgument { message }
+    }
+}
+
+impl ErrorSpan {
+    pub fn instruction_part(idx: usize) -> Self {
+        ErrorSpan::InstructionPart { idx }
+    }
+
+    pub fn argument(idx: usize) -> Self {
+        ErrorSpan::Argument { idx }
     }
 }
 
