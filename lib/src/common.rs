@@ -177,6 +177,12 @@ impl Stmt {
     }
 }
 
+impl Ident {
+    pub fn to_string(self) -> String {
+        self.name
+    }
+}
+
 /// Create a bitmask with `scale` bits set
 pub fn bitmask(scale: u8) -> u32 {
     1u32.checked_shl(u32::from(scale)).unwrap_or(0).wrapping_sub(1)
@@ -200,5 +206,29 @@ impl From<Option<Expr>> for JumpOffset {
 impl From<Expr> for JumpOffset {
     fn from(expr: Expr) -> JumpOffset {
         JumpOffset::Injected(expr)
+    }
+}
+
+impl From<&'_ Expr> for JumpOffset {
+    fn from(expr: &'_ Expr) -> JumpOffset {
+        JumpOffset::Injected(*expr)
+    }
+}
+
+impl From<u8> for Value {
+    fn from(val: u8) -> Value {
+        Value::Byte(val)
+    }
+}
+
+impl From<Expr> for Value {
+    fn from(expr: Expr) -> Value {
+        Value::Expr(expr)
+    }
+}
+
+impl From<&'_ Expr> for Value {
+    fn from(expr: &'_ Expr) -> Value {
+        Value::Expr(*expr)
     }
 }

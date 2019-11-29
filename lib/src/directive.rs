@@ -76,7 +76,7 @@ pub(crate) fn evaluate_directive(file_data: &mut DynasmData, stmts: &mut Vec<Stm
         },
         Directive::Byte(expr) => {
             // ; .bytes expr
-            stmts.push(Stmt::ExprExtend(*expr));
+            stmts.push(Stmt::ExprExtend(expr.into()));
         },
         Directive::Align { value, with } => {
             // ; .align expr ("," expr)
@@ -118,7 +118,7 @@ fn directive_const(file_data: &mut DynasmData, stmts: &mut Vec<Stmt>, values: &[
                 file_data.current_arch.handle_static_reloc(stmts, *jump, size);
             },
             Const::Value(expr) => {
-                stmts.push(Stmt::ExprSigned(*expr, size));
+                stmts.push(Stmt::ExprSigned(expr.into(), size));
             },
         }
     }

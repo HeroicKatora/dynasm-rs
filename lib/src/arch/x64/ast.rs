@@ -1,4 +1,4 @@
-use crate::common::{Expr, Ident, Jump, Size};
+use crate::common::{Expr, Ident, Jump, Size, Value};
 
 use std::cmp::PartialEq;
 
@@ -299,7 +299,7 @@ pub enum CleanArg {
         disp_size: Option<Size>,
         base: Option<Register>,
         index: Option<(Register, isize, Option<Expr>)>,
-        disp: Option<Expr>
+        disp: Option<Value>
     },
     // direct register reference, 
     Direct {

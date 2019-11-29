@@ -1,5 +1,5 @@
 use crate::State;
-use crate::common::{Expr, Jump, Size, Stmt};
+use crate::common::{Expr, Jump, Size, Stmt, Value};
 
 use std::fmt::{self, Debug};
 
@@ -24,11 +24,13 @@ pub trait BasicExprBuilder {
     /// When any error is generated then the instruction compilation is expected to fail.
     fn emit_error_at(&mut self, _: ErrorSpan, _: fmt::Arguments);
     /// a | b
-    fn bit_or(&mut self, _: Expr, _: u64) -> Option<Expr>;
+    fn bit_or(&mut self, _: Expr, _: Value) -> Option<Expr>;
     /// a & b
-    fn bit_and(&mut self, _: Expr, _: u64) -> Option<Expr>;
+    fn bit_and(&mut self, _: Expr, _: Value) -> Option<Expr>;
     /// a ^ b
-    fn bit_xor(&mut self, _: Expr, _: u64) -> Option<Expr>;
+    fn bit_xor(&mut self, _: Expr, _: Value) -> Option<Expr>;
+    /// a + b
+    fn add(&mut self, _: Expr, _: Value) -> Option<Expr>;
     /// !a
     fn neg(&mut self, _: Expr) -> Option<Expr>;
     /// Log2, mostly used to encode scalings.
@@ -41,9 +43,14 @@ pub enum Error {
     BadArgument {
         message: String,
     },
+    /// Expressions had to be combined but that failed.
     BadExprCombinator {
+        /// The expression that should have been added to some other value.
         expr: Expr,
     },
+    /// An unexplained error happened.
+    #[deprecated]
+    UndiagnosedError,
 }
 
 /// An opaque description of an error origin.
@@ -56,21 +63,91 @@ impl Error {
     }
 }
 
+impl From<&'static str> for Error {
+    fn from(message: &'_ str) -> Self {
+        message.to_string().into()
+    }
+}
+
+impl From<String> for Error {
+    fn from(message: String) -> Self {
+        Error::BadArgument { message }
+    }
+}
+
+impl From<Option<String>> for Error {
+    fn from(arg: Option<String>) -> Self {
+        match arg {
+            Some(message) => Error::BadArgument { message },
+            #[allow(deprecated)]
+            None => Error::UndiagnosedError,
+        }
+    }
+}
+
 pub trait BasicExprBuilderExt: BasicExprBuilder {
-    fn bit_or_else_err(&mut self, a: Expr, b: u64) -> Result<Expr, Error> {
+    fn bit_or_else_err(&mut self, a: Expr, b: Value) -> Result<Expr, Error> {
         self.bit_or(a, b).ok_or_else(|| Error::BadExprCombinator { expr: a })
     }
 
-    fn bit_and_else_err(&mut self, a: Expr, b: u64) -> Result<Expr, Error> {
+    fn bit_and_else_err(&mut self, a: Expr, b: Value) -> Result<Expr, Error> {
         self.bit_and(a, b).ok_or_else(|| Error::BadExprCombinator { expr: a })
     }
 
-    fn bit_xor_else_err(&mut self, a: Expr, b: u64) -> Result<Expr, Error> {
+    fn bit_xor_else_err(&mut self, a: Expr, b: Value) -> Result<Expr, Error> {
         self.bit_xor(a, b).ok_or_else(|| Error::BadExprCombinator { expr: a })
     }
 
     fn neg_else_err(&mut self, a: Expr) -> Result<Expr, Error> {
         self.neg(a).ok_or_else(|| Error::BadExprCombinator { expr: a })
+    }
+
+    fn add_else_err(&mut self, a: Expr, b: Value) -> Result<Expr, Error> {
+        self.add(a, b).ok_or_else(|| Error::BadExprCombinator { expr: a })
+    }
+
+    fn add_many(&mut self, iter: impl IntoIterator<Item=Expr>) -> Option<Value> {
+        let mut res = Value::Byte(0);
+        for expr in iter {
+            res = self.add(expr, res)?.into();
+        }
+        Some(res)
+    }
+
+    fn add_many_else_err(&mut self, iter: impl IntoIterator<Item=Expr>) -> Result<Value, Error> {
+        let mut res = Value::Byte(0);
+        for expr in iter {
+            res = self.add_else_err(expr, res)?.into();
+        }
+        Ok(res)
+    }
+
+    /// reg | ((val & mask) << shift)
+    /// `val` is not a Value since then the lib could already constant fold until `|`.
+    fn mask_shift_or(&mut self, reg: Value, val: Expr, mask: u64, shift: i8) -> Option<Expr> {
+        let operand = self.mask_shift(val, mask, shift)?;
+        self.bit_or(operand, reg)
+    }
+
+    /// reg | ((val & mask) << shift)
+    fn mask_shift_or_else_err(&mut self, reg: Value, val: Expr, mask: u64, shift: i8) -> Result<Expr, Error> {
+        let operand = self.mask_shift_else_err(val, mask, shift)?;
+        self.bit_or_else_err(operand, reg)
+    }
+
+    /// reg & !((val & mask) << shift)
+    /// `val` is not a Value since then the lib could already constant fold until `|`.
+    fn mask_shift_inverted_and(&mut self, reg: Value, val: Expr, mask: u64, shift: i8) -> Option<Expr> {
+        let operand = self.mask_shift(val, mask, shift)?;
+        let operand = self.neg(operand)?;
+        self.bit_and(operand, reg)
+    }
+
+    /// reg | ((val & mask) << shift)
+    fn mask_shift_inverted_and_else_err(&mut self, reg: Value, val: Expr, mask: u64, shift: i8) -> Result<Expr, Error> {
+        let operand = self.mask_shift_else_err(val, mask, shift)?;
+        let operand = self.neg_else_err(operand)?;
+        self.bit_and_else_err(operand, reg)
     }
 
     fn log2_else_err(&mut self, a: Expr) -> Result<Expr, Error> {
@@ -81,6 +158,8 @@ pub trait BasicExprBuilderExt: BasicExprBuilder {
         self.mask_shift(val, mask, shift).ok_or_else(|| Error::BadExprCombinator { expr: val })
     }
 }
+
+impl<T: BasicExprBuilder + ?Sized> BasicExprBuilderExt for T { }
 
 #[derive(Clone, Debug)]
 pub struct DummyArch {
@@ -127,15 +206,19 @@ impl BasicExprBuilder for State<'_> {
         eprintln!("{}", args);
     }
 
-    fn bit_or(&mut self, _: Expr, _: u64) -> Option<Expr> {
+    fn bit_or(&mut self, _: Expr, _: Value) -> Option<Expr> {
         None 
     }
 
-    fn bit_and(&mut self, _: Expr, _: u64) -> Option<Expr> {
+    fn bit_and(&mut self, _: Expr, _: Value) -> Option<Expr> {
         None
     }
 
-    fn bit_xor(&mut self, _: Expr, _: u64) -> Option<Expr> {
+    fn bit_xor(&mut self, _: Expr, _: Value) -> Option<Expr> {
+        None
+    }
+
+    fn add(&mut self, _: Expr, _: Value) -> Option<Expr> {
         None
     }
 
