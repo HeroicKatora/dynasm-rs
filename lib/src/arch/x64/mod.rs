@@ -35,12 +35,12 @@ pub struct Archx86 {
 
 pub struct InstructionX64 {
     pub inst: ast::Instruction,
-    pub args: Vec<ast::RawArg>,
+    pub args: Vec<ast::CleanArg>,
 }
 
 pub struct InstructionX86 {
     pub inst: ast::Instruction,
-    pub args: Vec<ast::RawArg>,
+    pub args: Vec<ast::CleanArg>,
 }
 
 impl Default for Archx64 {

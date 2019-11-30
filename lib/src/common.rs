@@ -107,7 +107,7 @@ pub enum Stmt {
     // label declarations
     GlobalLabel(Ident),
     LocalLabel(Ident),
-    DynamicLabel(TokenTree),
+    DynamicLabel(Expr),
 
     // and their respective relocations (as expressions as they differ per assembler)
     GlobalJumpTarget(Ident, JumpOffset, Vec<u8>),
@@ -117,7 +117,7 @@ pub enum Stmt {
     BareJumpTarget(JumpOffset, Vec<u8>),
 
     // a random statement that has to be inserted between assembly hunks
-    Stmt(TokenTree),
+    Stmt(Expr),
 }
 
 /// A value that is specifically for jump offset use.

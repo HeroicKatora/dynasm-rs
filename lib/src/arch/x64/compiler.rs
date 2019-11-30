@@ -84,20 +84,13 @@ impl RelocationKind {
  * Implementation
  */
 
-pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction, args: Vec<RawArg>)
+pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction, mut args: Vec<CleanArg>)
     -> Result<(), Error>
 {
     let mut ops = instruction.idents;
     let op = ops.pop().unwrap();
     let op_span = ErrorSpan::InstructionPart { idx: ops.len() };
     let prefixes = ops;
-
-    // Fold RawArgs into CleanArgs
-    let mut args = args
-        .into_iter()
-        .enumerate()
-        .map(|(idx, x)| clean_memoryref(ctx, ErrorSpan::argument(idx), x))
-        .collect::<Result<Vec<CleanArg>, _>>()?;
 
     // sanitize memory references, determine address size, and size immediates/displacements if possible
     let addr_size = sanitize_indirects_and_sizes(ctx, &mut args)?;
@@ -518,177 +511,6 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
     Ok(())
 }
 
-// Folds RawArgs into CleanArgs by analyzing the different raw memoryref variants
-fn clean_memoryref(ctx: &mut Context, span: ErrorSpan, arg: RawArg) -> Result<CleanArg, Error> {
-    Ok(match arg {
-        RawArg::Direct {reg} => CleanArg::Direct {reg},
-        RawArg::JumpTarget {jump, size} => CleanArg::JumpTarget {jump, size},
-        RawArg::IndirectJumpTarget {jump, size} => {
-            if let JumpKind::Bare(_) = jump.kind {
-                return Err("Extern indirect jumps are not supported. Use a displacement".into());
-            }
-            CleanArg::IndirectJumpTarget {jump, size}
-        },
-        RawArg::Immediate {value, size} => CleanArg::Immediate {value, size},
-        RawArg::Invalid => return Err(Error::UndiagnosedError),
-        RawArg::IndirectRaw {value_size, nosplit, disp_size, items} => {
-            // split the ast on the memoryrefitem types
-            let mut scaled = Vec::new();
-            let mut regs = Vec::new();
-            let mut disps = Vec::new();
-            for item in items {
-                match item {
-                    MemoryRefItem::Register(reg) => regs.push(reg),
-                    MemoryRefItem::ScaledRegister(reg, value) => scaled.push((reg, value)),
-                    MemoryRefItem::Displacement(expr) => disps.push(expr)
-                }
-            }
-
-            // figure out the base register if possible
-            let mut base_reg_index = None;
-            for (i, reg) in regs.iter().enumerate() {
-                if !(regs.iter().enumerate().any(|(j, other)| i != j && reg == other) ||
-                     scaled.iter().any(|&(ref other, _)| reg == other)) {
-                    base_reg_index = Some(i);
-                    break;
-                }
-            }
-            let mut base = base_reg_index.map(|i| regs.remove(i));
-
-            // join all registers
-            scaled.extend(regs.into_iter().map(|r| (r, 1)));
-            let mut joined_regs = Vec::new();
-            for (reg, s) in scaled {
-                // does this register already have a spot?
-                if let Some(i) = joined_regs.iter().position(|&(ref other, _)| &reg == other) {
-                    joined_regs[i].1 += s;
-                } else {
-                    joined_regs.push((reg, s));
-                }
-            }
-
-            // identify an index candidate (and a base if one wasn't found yet)
-            let index = if base.is_none() {
-                // we have to look for a base candidate first as not all index candidates
-                // are viable base candidates
-                base_reg_index = joined_regs.iter().position(|&(_, s)| s == 1);
-                base = base_reg_index.map(|i| joined_regs.remove(i).0);
-                // get the index
-                let index = joined_regs.pop();
-                // if nosplit was used, a scaled base was found but not an index, swap them
-                // as there was only one register and this register was scaled.
-                if nosplit && index.is_none() && base.is_some() {
-                    base.take().map(|reg| (reg, 1))
-                } else {
-                    index
-                }
-            } else {
-                joined_regs.pop()
-            };
-
-
-            if !joined_regs.is_empty() {
-                ctx.state.emit_error_at(span, format_args!("Impossible memory argument"));
-                return Err(Error::UndiagnosedError);
-            }
-
-            // merge disps
-            let disp = ctx.state.add_many(disps.into_iter());
-
-            // finalize the memoryref
-            CleanArg::Indirect {
-                nosplit,
-                size: value_size,
-                disp_size,
-                base,
-                index: index.map(|(r, s)| (r, s, None)),
-                disp,
-            }
-        },
-        RawArg::TypeMappedRaw {base_reg, scale, value_size, nosplit, disp_size, scaled_items, attribute} => {
-            let base = base_reg;
-
-            // collect registers / displacements
-            let mut scaled = Vec::new();
-            let mut disps = Vec::new();
-            for item in scaled_items {
-                match item {
-                    MemoryRefItem::Register(reg) => scaled.push((reg, 1)),
-                    MemoryRefItem::ScaledRegister(reg, scale) => scaled.push((reg, scale)),
-                    MemoryRefItem::Displacement(expr) => disps.push(expr)
-                }
-            }
-
-            // join all registers
-            let mut joined_regs = Vec::new();
-            for (reg, s) in scaled {
-                // does this register already have a spot?
-                if let Some(i) = joined_regs.iter().position(|&(ref other, _)| &reg == other) {
-                    joined_regs[i].1 += s;
-                } else {
-                    joined_regs.push((reg, s));
-                }
-            }
-
-            // identify an index register
-            let index = joined_regs.pop();
-
-            if !joined_regs.is_empty() {
-                ctx.state.emit_error_at(span, format_args!("Impossible memory argument"));
-                return Err(Error::UndiagnosedError);
-            }
-
-            // index = scale * index_scale * index
-            // disp = scale * disps + attribute
-
-            // Displacement size calculation intermezzo:
-            // in typemaps, the following equations are the relations for the scale and displacement.
-            // Now as we can't figure these out at compile time (this'd be nice), by default we'll
-            // always generate a 32-bit displacement if disp_size isn't set. This means we know
-            // the size of disp at this point already.
-            // as for the index calculation: that doesn't change size.
-            let true_disp_size = disp_size.unwrap_or(Size::DWORD);
-
-            // merge disps [a, b, c] into (a + b + c)
-            let scaled_disp = ctx.state.add_many(disps.into_iter());
-
-            // scale disps (a + b + c) * size_of<scale> as disp_size
-            let scaled_disp = scaled_disp.map(|disp| serialize::expr_size_of_scale(&scale, &disp, true_disp_size));
-
-            // attribute displacement offset_of(scale, attr) as disp_size
-            let attr_disp = attribute.map(|attr| serialize::expr_offset_of(&scale, &attr, true_disp_size));
-
-            // add displacement sources together
-            let disp = if let Some(scaled_disp) = scaled_disp {
-                if let Some(attr_disp) = attr_disp {
-                    ctx.state.add_many(vec![attr_disp, scaled_disp])
-                } else {
-                    Some(Value::Expr(scaled_disp))
-                }
-            } else {
-                attr_disp.map(Value::Expr)
-            };
-
-            let disp = disp.map(|d| serialize::reparse(&d).expect("Invalid expression generated internally"));
-
-            let index = index.map(|(r, s)| {
-                let scale_expr = serialize::reparse(&serialize::expr_size_of(&scale)).expect("Invalid expression generated internally");
-                (r, s, Some(scale_expr))
-            });
-
-            // finalize the memoryref
-            CleanArg::Indirect {
-                nosplit,
-                size: value_size,
-                disp_size,
-                base: Some(base),
-                index,
-                disp,
-            }
-        },
-    })
-}
-
 // Go through the CleanArgs, check for impossible to encode indirect arguments, fill in immediate/displacement size information
 // and return the effective address size
 fn sanitize_indirects_and_sizes(ctx: &mut Context, args: &mut [CleanArg]) -> Result<Option<Size>, Error> {
@@ -730,7 +552,7 @@ fn sanitize_indirects_and_sizes(ctx: &mut Context, args: &mut [CleanArg]) -> Res
                         ctx.state.emit_error_at(span, format_args!("Invalid displacement size, only BYTE or DWORD are possible"));
                     }
                 } else if let Some(ref disp) = *disp {
-                    match derive_size(disp) {
+                    match derive_size(*disp) {
                         Some(Size::BYTE)                         => *disp_size = Some(Size::BYTE),
                         Some(_) if addr_size == Some(Size::WORD) => *disp_size = Some(Size::WORD),
                         Some(_)                                  => *disp_size = Some(Size::DWORD),
@@ -738,8 +560,8 @@ fn sanitize_indirects_and_sizes(ctx: &mut Context, args: &mut [CleanArg]) -> Res
                     }
                 }
             },
-            CleanArg::Immediate {ref value, size: ref mut size @ None} => {
-                *size = derive_size(value);
+            CleanArg::Immediate {value, size: ref mut size @ None} => {
+                *size = derive_size(value.into());
             },
             _ => ()
         }
@@ -1638,13 +1460,20 @@ fn compile_sib_dynscale(ctx: &mut Context, scale: u8, scale_expr: Expr, reg1: Re
         byte = ctx.state.mask_shift_or_else_err(byte, expr, 7, 0)?.into();
     }
 
-    let (expr1, expr2) = serialize::expr_dynscale(
-        &delimited(quote_spanned!{ span=>
-            #scale_expr * #scale
-        }),
-        &byte
-    );
+    let scaled = quote_spanned!{ span=>
+        #scale_expr * #scale
+    };
+
+    let (expr1, expr2) = ctx.state.dynscale(scaled, byte)?;
+
     ctx.state.push(Stmt::Stmt(expr1));
-    ctx.state.push(Stmt::ExprUnsigned(expr2, Size::BYTE));
+    ctx.state.push(Stmt::ExprUnsigned(expr2.into(), Size::BYTE));
     Ok(())
+}
+
+fn derive_size(val: Value) -> Option<Size> {
+    Some(match val {
+        Value::Expr(Expr { size, .. }) => size,
+        Value::Byte(_) => Size::BYTE,
+    })
 }

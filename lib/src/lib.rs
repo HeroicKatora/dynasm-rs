@@ -4,10 +4,7 @@ extern crate bitflags;
 extern crate owning_ref;
 extern crate byteorder;
 
-use lazy_static::lazy_static;
-use owning_ref::{OwningRef, RwLockReadGuardRef};
-
-use std::sync::{RwLock, RwLockReadGuard, Mutex};
+use std::sync::{Mutex};
 use std::collections::HashMap;
 use std::path::{PathBuf, Path};
 
@@ -100,28 +97,4 @@ impl DynasmData {
             aliases: HashMap::new(),
         }
     }
-}
-
-type FileLocalData = OwningRef<RwLockReadGuard<'static, DynasmStorage>, Mutex<DynasmData>>;
-
-fn file_local_data(id: &Path) -> FileLocalData {
-    {
-        let data = RwLockReadGuardRef::new(DYNASM_STORAGE.read().unwrap());
-
-        if data.get(&id).is_some() {
-            return data.map(|x| x.get(&id).unwrap());
-        }
-    }
-
-    {
-        let mut lock = DYNASM_STORAGE.write().unwrap();
-        lock.insert(id.clone(), Mutex::new(DynasmData::new()));
-    }
-    RwLockReadGuardRef::new(DYNASM_STORAGE.read().unwrap()).map(|x| x.get(&id).unwrap())
-}
-
-// this is where the actual storage resides.
-lazy_static! {
-    // FIXME: why is this static?
-    static ref DYNASM_STORAGE: RwLock<DynasmStorage> = RwLock::new(HashMap::new());
 }

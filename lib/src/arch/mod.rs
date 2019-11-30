@@ -170,6 +170,10 @@ pub trait BasicExprBuilderExt: BasicExprBuilder {
         self.log2(a).ok_or_else(|| Error::BadExprCombinator { expr: a })
     }
 
+    fn dynscale(&mut self, _: Expr, _: Value) -> Result<(Expr, Expr), Error> {
+        unimplemented!()
+    }
+
     fn mask_shift_else_err(&mut self, val: Expr, mask: u64, shift: i8) -> Result<Expr, Error> {
         self.mask_shift(val, mask, shift).ok_or_else(|| Error::BadExprCombinator { expr: val })
     }
