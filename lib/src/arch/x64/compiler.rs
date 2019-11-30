@@ -478,7 +478,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
     for arg in args {
         match arg {
             SizedArg::Immediate {value, size} => {
-                ctx.state.push(Stmt::ExprSigned(value, size));
+                ctx.state.push(Stmt::ExprSigned(value.into(), size));
 
                 // bump relocations
                 relocations.iter_mut().for_each(|r| r.1 += size.in_bytes());

@@ -112,17 +112,13 @@ impl AssembleX64 for State<'_> {
     fn compile_instruction(&mut self, arch: &Archx64, instruction: InstructionX64) -> Result<(), Error> {
         let InstructionX64 { inst, args } = instruction;
 
-        let context = Context {
+        let ctx = Context {
             state: self,
             mode: X86Mode::Long,
             features: arch.features,
         };
 
-        if let Err(Some(e)) = compiler::compile_instruction(context, inst, args) {
-            return Err(Error::emit_error_at(e));
-        }
-
-        Ok(())
+        compiler::compile_instruction(ctx, inst, args)
     }
 
     fn build_instruction(&mut self, arch: &Archx64, instruction: InstructionX64) -> Result<(), Error>
@@ -173,12 +169,7 @@ impl AssembleX86 for State<'_> {
             features: arch.features,
         };
 
-
-        if let Err(Some(e)) = compiler::compile_instruction(ctx, inst, args) {
-            return Err(Error::emit_error_at(e));
-        }
-
-        Ok(())
+        compiler::compile_instruction(ctx, inst, args)
     }
 
     fn build_instruction(&mut self, arch: &Archx86, instruction: InstructionX86) -> Result<(), Error>

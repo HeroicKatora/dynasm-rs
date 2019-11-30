@@ -330,7 +330,7 @@ pub enum SizedArg {
         disp_size: Option<Size>,
         base: Option<Register>,
         index: Option<(Register, isize, Option<Expr>)>,
-        disp: Option<Expr>
+        disp: Option<Value>
     },
     // direct register reference, 
     Direct {
@@ -347,6 +347,7 @@ pub enum SizedArg {
     },
     // just an arbitrary expression
     Immediate {
+        value: Expr,
         size: Size
     }
 }
