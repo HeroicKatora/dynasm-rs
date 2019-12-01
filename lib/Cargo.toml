@@ -19,5 +19,4 @@ name = "dynasm"
 [dependencies]
 lazy_static = "^1.4"
 bitflags = "^1.1"
-owning_ref = "^0.4"
 byteorder = "^1.3"
