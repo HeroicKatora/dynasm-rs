@@ -1,5 +1,5 @@
 [package]
-name = "dynasm-asm"
+name = "dynasm-lib"
 version = "0.5.2"
 authors = ["Alexander Stocko <as@coder.gg>", "CensoredUsername <cens.username@gmail.com>", "HeroicKatora <andreas.molzer@gmx.de>"]
 
