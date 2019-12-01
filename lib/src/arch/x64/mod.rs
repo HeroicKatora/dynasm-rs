@@ -1,6 +1,6 @@
 mod ast;
 mod compiler;
-mod parser;
+pub mod parser;
 mod debug;
 mod x64data;
 
