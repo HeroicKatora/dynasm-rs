@@ -6,7 +6,7 @@ use std::fmt::{self, Debug};
 pub mod x64;
 // pub mod aarch64;
 
-pub(crate) trait Arch: Debug + Send {
+pub trait Arch: Debug + Send {
     fn name(&self) -> &str;
     fn set_features(&mut self, features: &[String]);
     fn handle_static_reloc(&self, stmts: &mut Vec<Stmt>, reloc: Jump, size: Size);
@@ -31,6 +31,8 @@ pub trait BasicExprBuilder {
     fn bit_xor(&mut self, _: Expr, _: Value) -> Option<Expr>;
     /// a + b
     fn add(&mut self, _: Expr, _: Value) -> Option<Expr>;
+    /// a * b
+    fn mul(&mut self, _: Expr, _: Value) -> Option<Expr>;
     /// !a
     fn neg(&mut self, _: Expr) -> Option<Expr>;
     /// Log2, mostly used to encode scalings.
@@ -39,6 +41,7 @@ pub trait BasicExprBuilder {
     fn mask_shift(&mut self, val: Expr, mask: u64, shift: i8) -> Option<Expr>;
 }
 
+#[derive(Debug, Clone)]
 pub enum Error {
     BadArgument {
         message: String,
@@ -54,6 +57,7 @@ pub enum Error {
 }
 
 /// An opaque description of an error origin.
+#[derive(Debug, Clone, Copy)]
 pub enum ErrorSpan {
     InstructionPart {
         idx: usize,
@@ -61,12 +65,6 @@ pub enum ErrorSpan {
     Argument {
         idx: usize,
     },
-}
-
-impl Error {
-    fn emit_error_at(message: String) -> Self {
-        Error::BadArgument { message }
-    }
 }
 
 impl ErrorSpan {
@@ -120,6 +118,10 @@ pub trait BasicExprBuilderExt: BasicExprBuilder {
 
     fn add_else_err(&mut self, a: Expr, b: Value) -> Result<Expr, Error> {
         self.add(a, b).ok_or_else(|| Error::BadExprCombinator { expr: a })
+    }
+
+    fn mul_else_err(&mut self, a: Expr, b: Value) -> Result<Expr, Error> {
+        self.mul(a, b).ok_or_else(|| Error::BadExprCombinator { expr: a })
     }
 
     fn add_many(&mut self, iter: impl IntoIterator<Item=Expr>) -> Option<Value> {
@@ -239,6 +241,10 @@ impl BasicExprBuilder for State<'_> {
     }
 
     fn add(&mut self, _: Expr, _: Value) -> Option<Expr> {
+        None
+    }
+
+    fn mul(&mut self, _: Expr, _: Value) -> Option<Expr> {
         None
     }
 

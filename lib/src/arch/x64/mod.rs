@@ -121,10 +121,10 @@ impl AssembleX64 for State<'_> {
         compiler::compile_instruction(ctx, inst, args)
     }
 
-    fn build_instruction(&mut self, arch: &Archx64, instruction: InstructionX64) -> Result<(), Error>
+    fn build_instruction(&mut self, _: &Archx64, _: InstructionX64) -> Result<(), Error>
         where Self: BasicExprBuilder
     {
-        unreachable!("Statically uncallable")
+        unreachable!("Statically uncallable, Self is not BasicExprBuilder")
     }
 }
 
@@ -163,7 +163,7 @@ impl AssembleX86 for State<'_> {
     fn compile_instruction(&mut self, arch: &Archx86, instruction: InstructionX86) -> Result<(), Error> {
         let InstructionX86 { inst, args } = instruction;
 
-        let mut ctx = Context {
+        let ctx = Context {
             state: self,
             mode: X86Mode::Protected,
             features: arch.features,
@@ -172,9 +172,9 @@ impl AssembleX86 for State<'_> {
         compiler::compile_instruction(ctx, inst, args)
     }
 
-    fn build_instruction(&mut self, arch: &Archx86, instruction: InstructionX86) -> Result<(), Error>
+    fn build_instruction(&mut self, _: &Archx86, _: InstructionX86) -> Result<(), Error>
         where Self: BasicExprBuilder
     {
-        unreachable!("Statically uncallable")
+        unreachable!("Statically uncallable, Self is not BasicExprBuilder")
     }
 }

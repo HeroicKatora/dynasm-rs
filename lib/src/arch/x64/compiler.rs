@@ -2,7 +2,7 @@ use crate::common::{Expr, Ident, Stmt, Size, Jump, JumpKind, Value};
 use crate::arch::{BasicExprBuilderExt, Error, ErrorSpan};
 
 use super::{Context, X86Mode};
-use super::ast::{RawArg, CleanArg, SizedArg, Instruction, MemoryRefItem, Register, RegKind, RegFamily, RegId};
+use super::ast::{CleanArg, SizedArg, Instruction, Register, RegKind, RegFamily, RegId};
 use super::x64data::get_mnemnonic_data;
 use super::x64data::Flags;
 use super::x64data::Features;
@@ -109,7 +109,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
     };
 
     // find a matching op
-    let data = match_op_format(&mut ctx, op_span, &op.name, &args)?;
+    let data = match_op_format(ctx, op_span, &op.name, &args)?;
 
     // determine if the features required for this op are fulfilled
     if !ctx.features.contains(data.features) {
@@ -182,7 +182,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
     }
 
     // check if this combination of args can actually be encoded and whether a rex prefix is necessary
-    let need_rex = check_rex(&mut ctx, data, &args, rex_w)?;
+    let need_rex = check_rex(ctx, data, &args, rex_w)?;
 
     // split args
     let (mut rm, reg, vvvv, ireg, mut args) = extract_args(data, args);
@@ -220,7 +220,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
         // map_sel is stored in the first byte of the opcode
         let (&map_sel, tail) = ops.split_first().expect("bad formatting data");
         ops = tail;
-        compile_vex_xop(ctx, data, &reg, &rm, map_sel, rex_w, &vvvv, vex_l, prefix);
+        compile_vex_xop(ctx, data, &reg, &rm, map_sel, rex_w, &vvvv, vex_l, prefix)?;
     // otherwise, the size/mod prefixes have to be pushed and check if a rex prefix has to be generated.
     } else {
         if let Some(pref) = pref_mod {
@@ -271,7 +271,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
             RegKind::from_number(data.reg)
         };
 
-        compile_modrm_sib(ctx, MOD_DIRECT, reg_k, rm.kind);
+        compile_modrm_sib(ctx, MOD_DIRECT, reg_k, rm.kind)?;
     // Indirect ModRM (+SIB) addressing
     } else if let Some(SizedArg::Indirect {disp_size, base, index, disp, ..}) = rm {
         let reg_k = if let Some(SizedArg::Direct {reg, ..}) = reg {
@@ -302,12 +302,12 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
             };
 
             // always need a SIB byte for VSIB addressing
-            compile_modrm_sib(ctx, mode, reg_k, RegKind::Static(RegId::RSP));
+            compile_modrm_sib(ctx, mode, reg_k, RegKind::Static(RegId::RSP))?;
 
             if let Some(expr) = scale_expr {
-                compile_sib_dynscale(ctx, scale as u8, expr, index, base);
+                compile_sib_dynscale(ctx, scale as u8, expr, index, base)?;
             } else {
-                compile_modrm_sib(ctx, encode_scale(scale).unwrap(), index, base);
+                compile_modrm_sib(ctx, encode_scale(scale).unwrap(), index, base)?;
             }
 
             if let Some(disp) = disp {
@@ -331,7 +331,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
             };
 
             // only need a mod.r/m byte for 16-bit addressing
-            compile_modrm_sib(ctx, mode, reg_k, base_k);
+            compile_modrm_sib(ctx, mode, reg_k, base_k)?;
 
             if let Some(disp) = disp {
                 ctx.state.push(Stmt::ExprSigned(disp.into(), if mode == MOD_DISP8 {Size::BYTE} else {Size::WORD}));
@@ -341,7 +341,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
 
         } else if mode_rip_relative {
             // encode the RIP + disp32 or disp32 form
-            compile_modrm_sib(ctx, MOD_NODISP, reg_k, RegKind::Static(RegId::RBP));
+            compile_modrm_sib(ctx, MOD_NODISP, reg_k, RegKind::Static(RegId::RBP))?;
 
             match ctx.mode {
                 X86Mode::Long => if let Some(disp) = disp {
@@ -384,27 +384,27 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
                 };
 
                 // escape into the SIB byte
-                compile_modrm_sib(ctx, mode, reg_k, RegKind::Static(RegId::RSP));
+                compile_modrm_sib(ctx, mode, reg_k, RegKind::Static(RegId::RSP))?;
 
                 if let Some(expr) = scale_expr {
-                    compile_sib_dynscale(ctx, scale as u8, expr, index.kind, base);
+                    compile_sib_dynscale(ctx, scale as u8, expr, index.kind, base)?;
                 } else {
-                    compile_modrm_sib(ctx, encode_scale(scale).unwrap(), index.kind, base);
+                    compile_modrm_sib(ctx, encode_scale(scale).unwrap(), index.kind, base)?;
                 }
 
             // no index, only a base. RBP at MOD_NODISP is used to encode RIP, but this is already handled
             } else if let Some(base) = base {
-                compile_modrm_sib(ctx, mode, reg_k, base.kind);
+                compile_modrm_sib(ctx, mode, reg_k, base.kind)?;
 
             // no base, no index. only disp. Easy in x86, but in x64 escape, use RBP as base and RSP as index
             } else {
                 match ctx.mode {
                     X86Mode::Protected => {
-                        compile_modrm_sib(ctx, mode, reg_k, RegKind::Static(RegId::RBP));
+                        compile_modrm_sib(ctx, mode, reg_k, RegKind::Static(RegId::RBP))?;
                     },
                     X86Mode::Long => {
-                        compile_modrm_sib(ctx, mode, reg_k, RegKind::Static(RegId::RSP));
-                        compile_modrm_sib(ctx, 0, RegKind::Static(RegId::RSP), RegKind::Static(RegId::RBP));
+                        compile_modrm_sib(ctx, mode, reg_k, RegKind::Static(RegId::RSP))?;
+                        compile_modrm_sib(ctx, 0, RegKind::Static(RegId::RSP), RegKind::Static(RegId::RBP))?;
                     }
                 }
             }
@@ -426,7 +426,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
         } else {
             RegKind::from_number(data.reg)
         };
-        compile_modrm_sib(ctx, MOD_NODISP, reg_k, RegKind::Static(RegId::RBP));
+        compile_modrm_sib(ctx, MOD_NODISP, reg_k, RegKind::Static(RegId::RBP))?;
 
         ctx.state.push(Stmt::u32(0));
         match ctx.mode {
@@ -765,7 +765,7 @@ fn sanitize_indirect(ctx: &mut Context, span: ErrorSpan, nosplit: bool, base: &m
     Ok(Some(size))
 }
 
-fn match_op_format(ctx: &Context, span: ErrorSpan, ident: &str, args: &[CleanArg]) -> Result<&'static Opdata, Error> {
+fn match_op_format(ctx: &mut Context, span: ErrorSpan, ident: &str, args: &[CleanArg]) -> Result<&'static Opdata, Error> {
     let name = ident.to_string();
     let name = name.as_str();
 
@@ -1460,10 +1460,7 @@ fn compile_sib_dynscale(ctx: &mut Context, scale: u8, scale_expr: Expr, reg1: Re
         byte = ctx.state.mask_shift_or_else_err(byte, expr, 7, 0)?.into();
     }
 
-    let scaled = quote_spanned!{ span=>
-        #scale_expr * #scale
-    };
-
+    let scaled = ctx.state.mul_else_err(scale_expr, scale.into())?.into();
     let (expr1, expr2) = ctx.state.dynscale(scaled, byte)?;
 
     ctx.state.push(Stmt::Stmt(expr1));

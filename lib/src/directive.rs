@@ -4,7 +4,7 @@ use crate::common::{Const, Expr, Stmt, Size, Value};
 use crate::arch;
 use crate::DynasmData;
 
-enum Directive {
+pub enum Directive {
     /// Set the architcture.
     Arch(String),
     /// Activate an architecture feature, or none to remove all.
@@ -28,7 +28,7 @@ enum Directive {
     Expr(Expr),
 }
 
-enum MalformedDirectiveError {
+pub enum MalformedDirectiveError {
     /// The architecture that was set was not recognized.
     UnknownArchitecture(String),
 
@@ -65,10 +65,10 @@ pub(crate) fn evaluate_directive(file_data: &mut DynasmData, stmts: &mut Vec<Stm
         Directive::Feature(features) => {
             // ;.feature none  cancels all features
             if features.len() == 1 && features[0] == "none" {
-                features.pop();
+                file_data.current_arch.set_features(&[]);
+            } else {
+                file_data.current_arch.set_features(features);
             }
-
-            file_data.current_arch.set_features(&features);
         },
         // ; .byte (expr ("," expr)*)?
         Directive::Data(size, consts) => {
@@ -115,7 +115,7 @@ fn directive_const(file_data: &mut DynasmData, stmts: &mut Vec<Stmt>, values: &[
     for value in values {
         match value {
             Const::Relocate(jump) => {
-                file_data.current_arch.handle_static_reloc(stmts, *jump, size);
+                file_data.current_arch.handle_static_reloc(stmts, jump.clone(), size);
             },
             Const::Value(expr) => {
                 stmts.push(Stmt::ExprSigned(expr.into(), size));

@@ -34,6 +34,7 @@ impl Size {
 }
 
 /// A value in a list of constants.
+#[derive(Debug, Clone)]
 pub enum Const {
     /// Add constant through applying some relocation.
     Relocate(Jump),
