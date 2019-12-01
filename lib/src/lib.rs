@@ -33,7 +33,7 @@ struct DynasmOpmap {
 pub struct State<'a> {
     pub stmts: &'a mut Vec<common::Stmt>,
     pub target: &'a str,
-    pub file_data: &'a DynasmData,
+    pub file_data: &'a mut DynasmData,
 }
 
 pub struct DynasmData {

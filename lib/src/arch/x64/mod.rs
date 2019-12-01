@@ -1,4 +1,4 @@
-mod ast;
+pub mod ast;
 mod compiler;
 pub mod parser;
 mod debug;
