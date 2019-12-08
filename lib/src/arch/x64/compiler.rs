@@ -1,4 +1,4 @@
-use crate::common::{Expr, Ident, Stmt, Size, Jump, JumpKind, Value};
+use crate::common::{Expr, Ident, Stmt, Size, Jump, JumpKind, NumericRepr, Value};
 use crate::arch::{BasicExprBuilderExt, Error, ErrorSpan};
 
 use super::{Context, X86Mode};
@@ -252,9 +252,10 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
         };
 
         if let RegKind::Dynamic(_, expr) = rm_k {
-            let last = Value::Byte(*last);
-            let expr = ctx.state.mask_shift_or_else_err(last, expr, 7, 0)?.into();
-            ctx.state.push(Stmt::ExprUnsigned(expr, Size::BYTE));
+            let last = Value::Byte((*last).into());
+            let mut expr = ctx.state.mask_shift_or_else_err(last, expr, 7, 0)?;
+            expr.repr = NumericRepr::U8;
+            ctx.state.push(Stmt::Const(Value::Expr(expr)));
         } else {
             ctx.state.push(Stmt::u8(last + (rm_k.encode() & 7)));
         }
@@ -311,7 +312,9 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
             }
 
             if let Some(disp) = disp {
-                ctx.state.push(Stmt::ExprSigned(disp.into(), if mode == MOD_DISP8 {Size::BYTE} else {Size::DWORD}));
+                let repr = if mode == MOD_DISP8 { NumericRepr::I8 } else { NumericRepr::I32 };
+                let disp = disp.convert(repr).expect("FIXME");
+                ctx.state.push(Stmt::Const(disp));
             } else if mode == MOD_DISP8 {
                 // no displacement was asked for, but we have to encode one as there's a base
                 ctx.state.push(Stmt::u8(0));
@@ -327,14 +330,16 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
             let mode = match (&disp, disp_size) {
                 (&Some(_), Some(Size::BYTE)) => MOD_DISP8,
                 (&Some(_), _) => MOD_DISP32, // well, technically 16-bit.
-                (&None, _) => if mode_rbp_base {MOD_DISP8} else {MOD_NODISP}
+                (&None, _) => if mode_rbp_base { MOD_DISP8 } else { MOD_NODISP }
             };
 
             // only need a mod.r/m byte for 16-bit addressing
             compile_modrm_sib(ctx, mode, reg_k, base_k)?;
 
             if let Some(disp) = disp {
-                ctx.state.push(Stmt::ExprSigned(disp.into(), if mode == MOD_DISP8 {Size::BYTE} else {Size::WORD}));
+                let repr = if mode == MOD_DISP8 { NumericRepr::I8 } else { NumericRepr::I16 };
+                let disp = disp.convert(repr).expect("FIXME");
+                ctx.state.push(Stmt::Const(disp));
             } else if mode == MOD_DISP8 {
                 ctx.state.push(Stmt::u8(0));
             }
@@ -345,7 +350,8 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
 
             match ctx.mode {
                 X86Mode::Long => if let Some(disp) = disp {
-                    ctx.state.push(Stmt::ExprSigned(disp.into(), Size::DWORD));
+                    let disp = disp.convert(NumericRepr::I32).expect("FIXME");
+                    ctx.state.push(Stmt::Const(disp));
                 } else {
                     ctx.state.push(Stmt::u32(0))
                 },
@@ -411,7 +417,9 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
 
             // Disp
             if let Some(disp) = disp {
-                ctx.state.push(Stmt::ExprSigned(disp.into(), if mode == MOD_DISP8 {Size::BYTE} else {Size::DWORD}));
+                let repr = if mode == MOD_DISP8 {NumericRepr::I8} else {NumericRepr::I32};
+                let disp = disp.convert(repr).expect("FIXME");
+                ctx.state.push(Stmt::Const(disp));
             } else if no_base {
                 ctx.state.push(Stmt::u32(0));
             } else if mode == MOD_DISP8 {
@@ -455,13 +463,32 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
         // if immediates are present, the register argument will be merged into the
         // first immediate byte.
         if !args.is_empty() {
-            if let SizedArg::Immediate {value, size: Size::BYTE} = args.remove(0) {
-                byte = ctx.state.mask_shift_or_else_err(byte, value, 0xF, 0)?.into();
+            let first_immediate = args.remove(0);
+            if let SizedArg::Immediate {value: Value::Expr(expr)} = first_immediate {
+                if expr.repr.size == Size::BYTE {
+                    byte = ctx.state.mask_shift_or_else_err(byte, expr, 0xF, 0)?.into();
+                } else {
+                    // FIXME: isn't this bad input data?
+                    panic!("formatting data size mismatch");
+                }
+            } else if let SizedArg::Immediate {value: Value::Number(value)} = first_immediate {
+                if value.repr().size == Size::BYTE {
+                    let value = value.as_u8();
+                    // Do the above mask_shift_or_else on constant data.
+                    let value = value & 0xF;
+                    byte = match byte {
+                        Value::Expr(byte) => ctx.state.bit_or_else_err(byte, Value::Byte(value))?.into(),
+                        Value::Number(byte) => Value::Byte(byte.as_u8() | value),
+                    };
+                } else {
+                    panic!("formatting data size mismatch");
+                }
             } else {
                 panic!("bad formatting data")
             }
         }
-        ctx.state.push(Stmt::ExprUnsigned(byte, Size::BYTE));
+        let byte = byte.convert(NumericRepr::U8).unwrap();
+        ctx.state.push(Stmt::Const(byte));
 
         // bump relocations
         relocations.iter_mut().for_each(|r| r.1 += 1);
@@ -470,15 +497,15 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
     // immediates
     for arg in args {
         match arg {
-            SizedArg::Immediate {value, size} => {
-                ctx.state.push(Stmt::ExprSigned(value.into(), size));
+            SizedArg::Immediate {value} => {
+                ctx.state.push(Stmt::Const(value));
 
                 // bump relocations
-                relocations.iter_mut().for_each(|r| r.1 += size.in_bytes());
+                relocations.iter_mut().for_each(|r| r.1 += value.size().in_bytes());
             },
             SizedArg::JumpTarget {jump, size} => {
                 // placeholder
-                ctx.state.push(Stmt::Const(0, size));
+                ctx.state.push(Stmt::zeroed(size));
 
                 // bump relocations
                 relocations.iter_mut().for_each(|r| r.1 += size.in_bytes());
@@ -560,9 +587,7 @@ fn sanitize_indirects_and_sizes(ctx: &mut Context, args: &mut [CleanArg]) -> Res
                     }
                 }
             },
-            CleanArg::Immediate {value, size: ref mut size @ None} => {
-                *size = derive_size(value.into());
-            },
+            CleanArg::Immediate {value} => { }
             _ => ()
         }
     }
@@ -833,8 +858,9 @@ fn match_format_string(ctx: &Context, fmt: &Opdata, args: &[CleanArg]) -> Result
 
         let size = match (code, arg) {
             // immediates
-            (b'i', &CleanArg::Immediate{size, ..})  |
-            (b'o', &CleanArg::Immediate{size, ..})  |
+            (b'i', &CleanArg::Immediate{value})  |
+            (b'o', &CleanArg::Immediate{value}) => Some(value.size()),
+
             (b'o', &CleanArg::JumpTarget{size, ..}) => size,
 
             // specific legacy regs
@@ -993,7 +1019,12 @@ fn size_operands(fmt: &Opdata, args: Vec<CleanArg>) -> Result<(Option<Size>, Vec
                     op_size = Some(size);
                 }
             },
-            CleanArg::Immediate {size, ..} |
+            CleanArg::Immediate {value} => {
+                if im_size.is_some() {
+                    panic!("Bad formatting data? multiple immediates with wildcard size");
+                }
+                im_size = Some(value.size());
+            },
             CleanArg::JumpTarget {size, ..} => {
                 if im_size.is_some() {
                     panic!("Bad formatting data? multiple immediates with wildcard size");
@@ -1045,7 +1076,8 @@ fn size_operands(fmt: &Opdata, args: Vec<CleanArg>) -> Result<(Option<Size>, Vec
             CleanArg::IndirectJumpTarget {jump, ..} =>
                 SizedArg::IndirectJumpTarget {jump},
             CleanArg::Immediate {value, ..} =>
-                SizedArg::Immediate {value, size},
+                // TODO: cast to the size determined.
+                SizedArg::Immediate {value},
             CleanArg::Indirect {disp_size, base, index, disp, ..} => 
                 SizedArg::Indirect {disp_size, base, index, disp},
         });
@@ -1309,7 +1341,8 @@ fn compile_rex(ctx: &mut Context, rex_w: bool, reg: &Option<SizedArg>, rm: &Opti
         rex = ctx.state.mask_shift_or_else_err(rex, expr, 8, -3)?.into();
     }
 
-    ctx.state.push(Stmt::ExprUnsigned(rex, Size::BYTE));
+    assert_eq!(rex.size(), Size::BYTE);
+    ctx.state.push(Stmt::Const(rex));
     Ok(())
 }
 
@@ -1384,7 +1417,8 @@ fn compile_vex_xop(
         if let RegKind::Dynamic(_, expr) = vvvv_k {
             byte1 = ctx.state.mask_shift_inverted_and_else_err(byte1, expr, 0xF, 3)?.into();
         }
-        ctx.state.push(Stmt::ExprUnsigned(byte1, Size::BYTE));
+        assert_eq!(byte1.size(), Size::BYTE);
+        ctx.state.push(Stmt::Const(byte1));
         return Ok(());
     }
 
@@ -1402,7 +1436,8 @@ fn compile_vex_xop(
         if let RegKind::Dynamic(_, expr) = base_k {
             byte1 = ctx.state.mask_shift_inverted_and_else_err(byte1, expr, 8, 2)?.into();
         }
-        ctx.state.push(Stmt::ExprUnsigned(byte1, Size::BYTE));
+        assert_eq!(byte1.size(), Size::BYTE);
+        ctx.state.push(Stmt::Const(byte1));
     } else {
         ctx.state.push(Stmt::u8(byte1));
     }
@@ -1413,7 +1448,8 @@ fn compile_vex_xop(
         if let RegKind::Dynamic(_, expr) = vvvv_k {
             byte2 = ctx.state.mask_shift_inverted_and_else_err(byte2, expr, 0xF, 3)?.into();
         }
-        ctx.state.push(Stmt::ExprUnsigned(byte2, Size::BYTE));
+        assert_eq!(byte2.size(), Size::BYTE);
+        ctx.state.push(Stmt::Const(byte2));
     } else {
         ctx.state.push(Stmt::u8(byte2));
     }
@@ -1441,7 +1477,8 @@ fn compile_modrm_sib(ctx: &mut Context, mode: u8, reg1: RegKind, reg2: RegKind)
     if let RegKind::Dynamic(_, expr) = reg2 {
         byte = ctx.state.mask_shift_or_else_err(byte, expr, 7, 0)?.into();
     }
-    ctx.state.push(Stmt::ExprUnsigned(byte, Size::BYTE));
+    assert_eq!(byte.size(), Size::BYTE);
+    ctx.state.push(Stmt::Const(byte));
     Ok(())
 }
 
@@ -1464,13 +1501,14 @@ fn compile_sib_dynscale(ctx: &mut Context, scale: u8, scale_expr: Expr, reg1: Re
     let (expr1, expr2) = ctx.state.dynscale(scaled, byte)?;
 
     ctx.state.push(Stmt::Stmt(expr1));
-    ctx.state.push(Stmt::ExprUnsigned(expr2.into(), Size::BYTE));
+    assert_eq!(expr2.repr.size, Size::BYTE);
+    ctx.state.push(Stmt::Const(expr2.into()));
     Ok(())
 }
 
 fn derive_size(val: Value) -> Option<Size> {
     Some(match val {
-        Value::Expr(Expr { size, .. }) => size,
-        Value::Byte(_) => Size::BYTE,
+        Value::Expr(Expr { repr, .. }) => repr.size,
+        Value::Number(nr) => nr.repr().size,
     })
 }

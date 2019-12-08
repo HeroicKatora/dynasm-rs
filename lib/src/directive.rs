@@ -1,6 +1,6 @@
 use std::collections::hash_map::Entry;
 
-use crate::common::{Const, Expr, Stmt, Size, Value};
+use crate::common::{Const, Expr, NumericRepr, Stmt, Size, Value};
 use crate::arch;
 use crate::DynasmData;
 
@@ -117,8 +117,9 @@ fn directive_const(file_data: &mut DynasmData, stmts: &mut Vec<Stmt>, values: &[
             Const::Relocate(jump) => {
                 file_data.current_arch.handle_static_reloc(stmts, jump.clone(), size);
             },
-            Const::Value(expr) => {
-                stmts.push(Stmt::ExprSigned(expr.into(), size));
+            Const::Value(mut expr) => {
+                expr.repr = NumericRepr::signed(size);
+                stmts.push(Stmt::Const(expr.into()));
             },
         }
     }

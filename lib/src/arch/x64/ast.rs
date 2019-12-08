@@ -317,8 +317,7 @@ pub enum CleanArg {
     },
     // just an arbitrary expression
     Immediate {
-        value: Expr,
-        size: Option<Size>
+        value: Value,
     }
 }
 
@@ -347,8 +346,7 @@ pub enum SizedArg {
     },
     // just an arbitrary expression
     Immediate {
-        value: Expr,
-        size: Size
+        value: Value,
     }
 }
 

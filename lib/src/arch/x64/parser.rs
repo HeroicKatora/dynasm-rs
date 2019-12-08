@@ -391,16 +391,16 @@ pub const X86_FAMILIES: &[(&str, (Size, RegFamily))] = &[
 ];
 
 lazy_static!{
-    static ref X64_REGISTER_MAP: HashMap<&'static str, (RegId, Size)> = {
+    pub static ref X64_REGISTER_MAP: HashMap<&'static str, (RegId, Size)> = {
         X64_REGISTERS.iter().cloned().collect()
     };
-    static ref X86_REGISTERS_MAP: HashMap<&'static str, (RegId, Size)> = {
+    pub static ref X86_REGISTERS_MAP: HashMap<&'static str, (RegId, Size)> = {
         X86_REGISTERS.iter().cloned().collect()
     };
-    static ref X64_FAMILIES_MAP:  HashMap<&'static str, (Size, RegFamily)> = {
+    pub static ref X64_FAMILIES_MAP:  HashMap<&'static str, (Size, RegFamily)> = {
         X64_FAMILIES.iter().cloned().collect()
     };
-    static ref X86_FAMILIES_MAP:  HashMap<&'static str, (Size, RegFamily)> = {
+    pub static ref X86_FAMILIES_MAP:  HashMap<&'static str, (Size, RegFamily)> = {
         X86_FAMILIES.iter().cloned().collect()
     };
 }

@@ -14,8 +14,24 @@ pub enum Size {
     HWORD = 32,
 }
 
+/// A number representation (sign and size).
+#[derive(Debug, PartialOrd, PartialEq, Ord, Eq, Hash, Clone, Copy)]
+pub struct NumericRepr {
+    pub size: Size,
+    pub signed: bool,
+}
+
+/// An integral value in a particular `Numeric` representation.
+#[derive(Debug, PartialOrd, PartialEq, Ord, Eq, Hash, Clone, Copy)]
+pub struct Number {
+    /// The bit representation of the number.
+    /// TODO: comment on the actual representation chosen.
+    value: u64,
+    repr: NumericRepr,
+}
+
 impl Size {
-    pub fn in_bytes(self) -> u8 {
+    pub const fn in_bytes(self) -> u8 {
         self as u8
     }
 
@@ -29,6 +45,181 @@ impl Size {
             Size::PWORD => "i80",
             Size::OWORD => "i128",
             Size::HWORD => "i256",
+        }
+    }
+}
+
+impl NumericRepr {
+    pub const U8: NumericRepr = NumericRepr::unsigned(Size::BYTE);
+    pub const I8: NumericRepr = NumericRepr::signed(Size::BYTE);
+    pub const U16: NumericRepr = NumericRepr::unsigned(Size::WORD);
+    pub const I16: NumericRepr = NumericRepr::signed(Size::WORD);
+    pub const U32: NumericRepr = NumericRepr::unsigned(Size::DWORD);
+    pub const I32: NumericRepr = NumericRepr::signed(Size::DWORD);
+    pub const U64: NumericRepr = NumericRepr::unsigned(Size::QWORD);
+    pub const I64: NumericRepr = NumericRepr::signed(Size::QWORD);
+
+    pub const fn signed(size: Size) -> Self {
+        NumericRepr { size, signed: true }
+    }
+
+    pub const fn unsigned(size: Size) -> Self {
+        NumericRepr { size, signed: false }
+    }
+}
+
+impl Number {
+    /// Cast a short constant to a specific representation.
+    pub const fn from_u64_and_size(val: u64, size: Size) -> Self {
+        Self::from_u64_and_repr(val, NumericRepr::unsigned(size))
+    }
+
+    pub const fn from_u64_and_repr(value: u64, repr: NumericRepr) -> Self {
+        Number { value, repr }
+    }
+
+    pub const fn repr(self) -> NumericRepr {
+        self.repr
+    }
+
+    pub fn byte(val: u8) -> Self {
+        Self::from_u64_and_size(val.into(), Size::BYTE)
+    }
+
+    pub fn word(val: u16) -> Self {
+        Self::from_u64_and_size(val.into(), Size::WORD)
+    }
+
+    pub fn dword(val: u32) -> Self {
+        Self::from_u64_and_size(val.into(), Size::DWORD)
+    }
+
+    pub fn qword(val: u64) -> Self {
+        Self::from_u64_and_size(val.into(), Size::QWORD)
+    }
+
+    pub fn as_u8(self) -> u8 {
+        self.cast_as(NumericRepr::unsigned(Size::BYTE)).value as u8
+    }
+
+    pub fn as_i8(self) -> i8 {
+        self.cast_as(NumericRepr::signed(Size::BYTE)).value as i8
+    }
+
+    pub fn as_u16(self) -> u16 {
+        self.cast_as(NumericRepr::unsigned(Size::WORD)).value as u16
+    }
+
+    pub fn as_i16(self) -> i16 {
+        self.cast_as(NumericRepr::signed(Size::WORD)).value as i16
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.cast_as(NumericRepr::unsigned(Size::DWORD)).value as u32
+    }
+
+    pub fn as_i32(self) -> i32 {
+        self.cast_as(NumericRepr::signed(Size::DWORD)).value as i32
+    }
+
+    pub fn as_u64(self) -> u64 {
+        self.cast_as(NumericRepr::unsigned(Size::QWORD)).value as u64
+    }
+
+    pub fn as_i64(self) -> i64 {
+        self.cast_as(NumericRepr::signed(Size::DWORD)).value as i64
+    }
+
+    /// Perform a cast in 2-complement.
+    ///
+    /// Casts work like Rust `as` coercion. A sign extension is performed when the source is
+    /// signed, else the number is zero extended.
+    // FIXME: test coverage!
+    pub fn cast_as(mut self, repr: NumericRepr) -> Number {
+        // Just use the value, it is stored with sign/zero extension.
+        self.repr = repr;
+        // Adjust sign extension if necessary now.
+        self.correct_extension_bits_for_sign();
+        self
+    }
+
+    /// Do a value preserving (`TryFrom`) conversion.
+    ///
+    /// This is not the same as lossless, `u32` and `i32` can be converted without loss but do not
+    /// preserve the values.
+    pub fn convert(self, repr: NumericRepr) -> Option<Number> {
+        let cast = self.cast_as(repr);
+
+        let max = self.repr_of_max().min(cast.repr_of_max());
+        let below_min = self.repr_below_min().max(cast.repr_below_min());
+
+        if cast.value <= max && cast.value > below_min {
+            Some(cast)
+        } else {
+            None
+        }
+    }
+
+    pub fn make_signed(mut self, signed: bool) -> Number {
+        self.repr.signed = signed;
+        self.correct_extension_bits_for_sign();
+        self
+    }
+
+    /// Resize, keeping the same signedness.
+    pub const fn resize(self, size: Size) -> Number {
+        // Because resizing does not change signedness this yields correct extension bits.
+        Number {
+            value: self.value,
+            repr: NumericRepr { size, signed: self.repr.signed },
+        }
+    }
+
+    /// The value bitmask for the size.
+    fn mask(self) -> u64 {
+        use core::convert::TryInto;
+        #[allow(non_snake_case)]
+        let ALL_BITS: u8 = core::mem::size_of::<u64>().try_into().unwrap();
+
+        let len: u8 = self.byte_len() * 8;
+        (!0u64) >> ALL_BITS.checked_sub(len).unwrap()
+    }
+
+    fn byte_len(self) -> u8 {
+        self.repr.size.in_bytes()
+    }
+
+    /// The maximum value representation.
+    /// Used to check the value range in unsigned representation of any length.
+    fn repr_of_max(self) -> u64 {
+        self.mask() ^ (if self.repr.signed { self.sign_bit() } else { 0 })
+    }
+
+    /// The representation below minimum value.
+    /// Used to check the value range in unsigned representation of any length.
+    fn repr_below_min(self) -> u64 {
+        if self.repr.signed {
+            ((!0u64) ^ self.repr_of_max()) - 1
+        } else {
+            0
+        }
+    }
+
+    fn sign_bit(self) -> u64 {
+        let right_shift = (self.byte_len() * 8) - 1;
+        1 << right_shift
+    }
+
+    fn is_sign_bit_set(self) -> bool {
+        self.value & self.sign_bit() != 0
+    }
+
+    /// Fix the sign extension after a cast.
+    fn correct_extension_bits_for_sign(&mut self) {
+        if self.repr.signed && self.is_sign_bit_set() {
+            self.value |= !self.mask();
+        } else {
+            self.value &= self.mask();
         }
     }
 }
@@ -89,12 +280,8 @@ impl Jump {
 /// An abstract representation of a dynasm runtime statement to be emitted
 #[derive(Debug, Clone)]
 pub enum Stmt {
-    // simply push data into the instruction stream. unsigned
-    Const(u64, Size),
-    // push data that is stored inside of an expression. unsigned
-    ExprUnsigned(Value, Size),
-    // push signed data into the instruction stream. signed
-    ExprSigned(Value, Size),
+    // push integral data with arbitrary size.
+    Const(Value),
 
     // extend the instruction stream with unsigned bytes
     Extend(Vec<u8>),
@@ -140,9 +327,10 @@ pub struct Ident {
 pub struct Expr {
     /// An index generated by the library user, uniquely identifying this expression.
     pub idx: usize,
-    /// A word size into which this expression result fits. The code generator may choose to
-    /// represent it with a larger size instead but not a smaller.
-    pub size: Size,
+    /// Indicate the representation for this numeric expression. In the input, this is used by the
+    /// caller to indicate the current type (or the smallest coercible one) while the output uses
+    /// it to inform the caller of the final cast to use.
+    pub repr: NumericRepr,
 }
 
 /// A dynamically or statically computed value.
@@ -153,34 +341,76 @@ pub struct Expr {
 /// particular, the evaluation can even be further delayed by the caller and left to `rustc`.
 #[derive(Debug, Clone, Copy)]
 pub enum Value {
-    Byte(u8),
+    /// A constant number.
+    Number(Number),
+    /// An external expression of the caller.
     Expr(Expr),
 }
 
 // convenience methods
 impl Stmt {
-    #![allow(dead_code)]
-
     pub fn u8(value: u8) -> Stmt {
-        Stmt::Const(u64::from(value), Size::BYTE)
+        Stmt::Const(Value::Byte(value))
     }
 
     pub fn u16(value: u16) -> Stmt {
-        Stmt::Const(u64::from(value), Size::WORD)
+        Stmt::Const(Value::Word(value))
     }
 
     pub fn u32(value: u32) -> Stmt {
-        Stmt::Const(u64::from(value), Size::DWORD)
+        Stmt::Const(Value::Dword(value))
     }
 
     pub fn u64(value: u64) -> Stmt {
-        Stmt::Const(value, Size::QWORD)
+        Stmt::Const(Value::Qword(value))
+    }
+
+    /// Zeroed bytes of a numeric size.
+    pub fn zeroed(size: Size) -> Self {
+        let nr = Number::from_u64_and_size(0, size);
+        Stmt::Const(Value::Number(nr))
     }
 }
 
 impl Ident {
     pub fn to_string(self) -> String {
         self.name
+    }
+}
+
+impl Value {
+    pub fn Byte(val: u8) -> Self {
+        Value::Number(Number::byte(val))
+    }
+
+    pub fn Word(val: u16) -> Self {
+        Value::Number(Number::word(val))
+    }
+
+    pub fn Dword(val: u32) -> Self {
+        Value::Number(Number::dword(val))
+    }
+
+    pub fn Qword(val: u64) -> Self {
+        Value::Number(Number::qword(val))
+    }
+
+    pub fn repr(self) -> NumericRepr {
+        match self {
+            Value::Number(nr) => nr.repr,
+            Value::Expr(expr) => expr.repr,
+        }
+    }
+
+    pub fn convert(self, repr: NumericRepr) -> Option<Self> {
+        Some(match self {
+            Value::Number(nr) => Value::Number(nr.convert(repr)?),
+            Value::Expr(expr) => Value::Expr(Expr { idx: expr.idx, repr }),
+        })
+    }
+
+    pub fn size(self) -> Size {
+        self.repr().size
     }
 }
 
@@ -237,5 +467,17 @@ impl From<Expr> for Value {
 impl From<&'_ Expr> for Value {
     fn from(expr: &'_ Expr) -> Value {
         Value::Expr(*expr)
+    }
+}
+
+impl From<Value> for Stmt {
+    fn from(val: Value) -> Self {
+        Stmt::Const(val)
+    }
+}
+
+impl From<&'_ Value> for Stmt {
+    fn from(val: &'_ Value) -> Self {
+        Stmt::Const(*val)
     }
 }

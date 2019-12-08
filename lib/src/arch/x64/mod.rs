@@ -99,7 +99,7 @@ impl Arch for Archx64 {
     fn handle_static_reloc(&self, stmts: &mut Vec<Stmt>, reloc: Jump, size: Size) {
         let data = [0, size.in_bytes()]; // no offset, specified size, relative implicit
 
-        stmts.push(Stmt::Const(0, size));
+        stmts.push(Stmt::zeroed(size));
         stmts.push(reloc.encode(&data));
     }
 
@@ -150,7 +150,7 @@ impl Arch for Archx86 {
     fn handle_static_reloc(&self, stmts: &mut Vec<Stmt>, reloc: Jump, size: Size) {
         let data = [0, size.in_bytes(), 0]; // no offset, specified size, relative
 
-        stmts.push(Stmt::Const(0, size));
+        stmts.push(Stmt::zeroed(size));
         stmts.push(reloc.encode(&data));
     }
 
