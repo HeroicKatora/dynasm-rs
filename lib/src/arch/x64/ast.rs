@@ -362,6 +362,7 @@ pub enum Scale {
  * Parsed instruction
  */
 
+#[derive(Debug)]
 pub struct Instruction {
     pub idents: Vec<Ident>
 }

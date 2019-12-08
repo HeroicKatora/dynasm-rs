@@ -175,6 +175,22 @@ impl Number {
         }
     }
 
+    pub fn write_le_bytes(self, buf: &mut Vec<u8>) {
+        let bytes = (0..self.repr.size.in_bytes())
+            .scan(self.value, |value, _| {
+                let byte = *value & 0xff;
+                *value >>= 8;
+                Some(byte as u8)
+            });
+        buf.extend(bytes)
+    }
+
+    pub fn to_le_bytes(self) -> Vec<u8> {
+        let mut out = vec![];
+        self.write_le_bytes(&mut out);
+        out
+    }
+
     /// The value bitmask for the size.
     fn mask(self) -> u64 {
         use core::convert::TryInto;

@@ -33,11 +33,13 @@ pub struct Archx86 {
     features: x64data::Features,
 }
 
+#[derive(Debug)]
 pub struct InstructionX64 {
     pub inst: ast::Instruction,
     pub args: Vec<ast::CleanArg>,
 }
 
+#[derive(Debug)]
 pub struct InstructionX86 {
     pub inst: ast::Instruction,
     pub args: Vec<ast::CleanArg>,

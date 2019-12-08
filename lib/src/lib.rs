@@ -12,7 +12,7 @@ pub mod arch;
 /// Module contaning the implementation of directives
 mod directive;
 
-pub use common::{Const, Expr, Ident, JumpOffset, Size, Stmt, Value};
+pub use common::{Const, Expr, Ident, Number, NumericRepr, JumpOffset, Size, Stmt, Value};
 pub use directive::{Directive, MalformedDirectiveError};
 
 /// output from parsing a full dynasm invocation. target represents the first dynasm argument, being the assembler
