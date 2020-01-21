@@ -4,6 +4,7 @@ use crate::common::{Const, Expr, NumericRepr, Stmt, Size, Value};
 use crate::arch;
 use crate::DynasmData;
 
+/// Common directives.
 pub enum Directive {
     /// Set the architcture.
     Arch(String),

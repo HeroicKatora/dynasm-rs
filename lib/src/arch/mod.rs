@@ -1,4 +1,4 @@
-use crate::State;
+use crate::BasicAssembler;
 use crate::common::{Expr, Jump, Size, Stmt, Value};
 
 use std::fmt::{self, Debug};
@@ -172,7 +172,7 @@ impl Arch for DummyArch {
     }
 
     fn set_features(&mut self, features: &[String]) {
-        if let Some(feature) = features.first() {
+        if !features.is_empty() {
             eprintln!("Cannot set features when the assembling architecture is undefined. Define it using a .arch directive");
         }
     }
@@ -190,7 +190,7 @@ impl Arch for DummyArch {
 ///
 /// It can not combine any expressions, pushes statements into a `Vec` and emits errors onto
 /// standard error directly.
-impl BasicExprBuilder for State<'_> {
+impl BasicExprBuilder for BasicAssembler {
     fn push(&mut self, stmt: Stmt) {
         self.stmts.push(stmt)
     }

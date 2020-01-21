@@ -6,7 +6,7 @@ mod x64data;
 
 use std::borrow::Cow;
 
-use crate::State;
+use crate::BasicAssembler;
 use crate::arch::{Arch, Error as ExprBuilderError, BasicExprBuilder};
 use crate::common::{Size, Stmt, Jump};
 
@@ -172,7 +172,7 @@ impl Arch for Archx64 {
     }
 }
 
-impl AssembleX64 for State<'_> {
+impl AssembleX64 for BasicAssembler {
     fn compile_instruction(&mut self, arch: &Archx64, instruction: InstructionX64) -> Result<(), Error> {
         let InstructionX64 { inst, args } = instruction;
 
@@ -223,7 +223,7 @@ impl Arch for Archx86 {
     }
 }
 
-impl AssembleX86 for State<'_> {
+impl AssembleX86 for BasicAssembler {
     fn compile_instruction(&mut self, arch: &Archx86, instruction: InstructionX86) -> Result<(), Error> {
         let InstructionX86 { inst, args } = instruction;
 
