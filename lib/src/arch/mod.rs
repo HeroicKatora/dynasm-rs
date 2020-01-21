@@ -20,9 +20,6 @@ pub trait Arch: Debug + Send {
 pub trait BasicExprBuilder {
     /// Append a new statement.
     fn push(&mut self, _: Stmt);
-    /// Emit an error message.
-    /// When any error is generated then the instruction compilation is expected to fail.
-    fn emit_error_at(&mut self, _: ErrorSpan, _: fmt::Arguments);
     /// a | b
     fn bit_or(&mut self, _: Expr, _: Value) -> Option<Expr>;
     /// a & b
@@ -39,21 +36,18 @@ pub trait BasicExprBuilder {
     fn log2(&mut self, _: Expr) -> Option<Expr>;
     /// (val & mask) << shift
     fn mask_shift(&mut self, val: Expr, mask: u64, shift: i8) -> Option<Expr>;
+    /// Emit an error message.
+    /// When any error is generated then the instruction compilation is expected to fail.
+    fn emit_error_at(&mut self, _: ErrorSpan, _: fmt::Arguments);
 }
 
 #[derive(Debug, Clone)]
 pub enum Error {
-    BadArgument {
-        message: String,
-    },
     /// Expressions had to be combined but that failed.
     BadExprCombinator {
         /// The expression that should have been added to some other value.
         expr: Expr,
     },
-    /// An unexplained error happened.
-    #[deprecated]
-    UndiagnosedError,
 }
 
 /// An opaque description of an error origin.
@@ -74,28 +68,6 @@ impl ErrorSpan {
 
     pub fn argument(idx: usize) -> Self {
         ErrorSpan::Argument { idx }
-    }
-}
-
-impl From<&'static str> for Error {
-    fn from(message: &'_ str) -> Self {
-        message.to_string().into()
-    }
-}
-
-impl From<String> for Error {
-    fn from(message: String) -> Self {
-        Error::BadArgument { message }
-    }
-}
-
-impl From<Option<String>> for Error {
-    fn from(arg: Option<String>) -> Self {
-        match arg {
-            Some(message) => Error::BadArgument { message },
-            #[allow(deprecated)]
-            None => Error::UndiagnosedError,
-        }
     }
 }
 

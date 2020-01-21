@@ -4,8 +4,10 @@ pub mod parser;
 mod debug;
 mod x64data;
 
+use std::borrow::Cow;
+
 use crate::State;
-use crate::arch::{Arch, Error, BasicExprBuilder};
+use crate::arch::{Arch, Error as ExprBuilderError, BasicExprBuilder};
 use crate::common::{Size, Stmt, Jump};
 
 #[cfg(feature = "dynasm_opmap")]
@@ -77,6 +79,66 @@ pub trait AssembleX86 {
     /// Only available when the type is also capable of building new composite expressions.
     fn build_instruction(&mut self, arch: &Archx86, _: InstructionX86) -> Result<(), Error>
         where Self: BasicExprBuilder;
+}
+
+/// An error while assembling, either an error in the environment or during processing.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum Error {
+    /// An error happened within the expression builder.
+    Expr(ExprBuilderError),
+    /// Use of features that were disabled or would need to be explicitly enabled.
+    // format!( "This instruction uses features that are not indicated to be available: {}", data.features - ctx.features).into());
+    DisabledFeatures(x64data::Features),
+    /// An operand would be supported in another mode but not this one.
+    /// This may be due to being unimplemented.
+    UnsupportedOperandInThisMode {
+        /// The stringified operand.
+        operand: String,
+        /// The size of the operand.
+        op_size: Size,
+        /// The mode where the error happened.
+        mode: X86Mode,
+        /// The mode where it would be supported.
+        mode_hint: Option<X86Mode>,
+    },
+    /// A more generic version of the previous.
+    /// Not all messages have been implemented in full detail.
+    UnsupportedInThisMode {
+        message: Cow<'static, str>,
+        mode_hint: Option<X86Mode>,
+    },
+    /// An error without occurred where diagnostics offer no introspection.
+    /// This should be slowly phased out. Hint: Add a `#[deprecated]` to this variant to show
+    /// remaining instances.
+    Generic {
+        message: Cow<'static, str>,
+    },
+    /// Some unspecified consistency check did not succeed.
+    /// When this occurs we have emitted one or several diagnostic messages.
+    Fatal,
+}
+
+impl From<ExprBuilderError> for Error {
+    fn from(err: ExprBuilderError) -> Self {
+        Error::Expr(err)
+    }
+}
+
+impl From<&'static str> for Error {
+    fn from(message: &'static str) -> Self {
+        Error::Generic {
+            message: Cow::Borrowed(message),
+        }
+    }
+}
+
+impl From<String> for Error {
+    fn from(message: String) -> Self {
+        Error::Generic {
+            message: Cow::Owned(message),
+        }
+    }
 }
 
 impl Arch for Archx64 {

@@ -1,7 +1,7 @@
 use crate::common::{Expr, Ident, Stmt, Size, Jump, JumpKind, NumericRepr, Value};
-use crate::arch::{BasicExprBuilderExt, Error, ErrorSpan};
+use crate::arch::{BasicExprBuilderExt, ErrorSpan};
 
-use super::{Context, X86Mode};
+use super::{Context, Error, X86Mode};
 use super::ast::{CleanArg, SizedArg, Instruction, Register, RegKind, RegFamily, RegId};
 use super::x64data::get_mnemnonic_data;
 use super::x64data::Flags;
@@ -11,7 +11,6 @@ use super::debug::format_opdata_list;
 use std::mem::swap;
 use std::slice;
 use std::iter;
-
 
 /*
  * Instruction encoding data formats
@@ -105,7 +104,12 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
         (X86Mode::Long, Size::DWORD) => true,
         (X86Mode::Protected, Size::DWORD) => false,
         (X86Mode::Protected, Size::WORD) => true,
-        _ => return Err("Impossible address size".into())
+        (mode, op_size) => return Err(Error::UnsupportedOperandInThisMode {
+            operand: op.to_string(),
+            op_size,
+            mode,
+            mode_hint: None,
+        })
     };
 
     // find a matching op
@@ -113,10 +117,7 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
 
     // determine if the features required for this op are fulfilled
     if !ctx.features.contains(data.features) {
-        return Err(format!(
-            "This instruction uses features that are not indicated to be available: {}",
-            data.features - ctx.features
-        ).into());
+        return Err(Error::DisabledFeatures(data.features - ctx.features));
     }
 
     // determine legacy prefixes
@@ -136,7 +137,12 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
 
         match ctx.mode {
             X86Mode::Protected => if op_size == Size::QWORD {
-                return Err(format!("'{}': Does not support 64 bit operands in 32-bit mode", op.to_string()).into());
+                return Err(Error::UnsupportedOperandInThisMode {
+                    operand: op.to_string(),
+                    op_size,
+                    mode: X86Mode::Protected,
+                    mode_hint: Some(X86Mode::Long),
+                });
             },
             X86Mode::Long => ()
         }
@@ -146,14 +152,26 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
                 (Size::WORD, _) => pref_size = true,
                 (Size::QWORD, X86Mode::Long) => (),
                 (Size::DWORD, X86Mode::Protected) => (),
-                (Size::DWORD, X86Mode::Long) => return Err(format!("'{}': Does not support 32 bit operands in 64-bit mode", op.to_string()).into()),
+                (Size::DWORD, X86Mode::Long) => {
+                    return Err(Error::UnsupportedOperandInThisMode {
+                        operand: op.to_string(),
+                        op_size,
+                        mode: X86Mode::Long,
+                        mode_hint: Some(X86Mode::Protected),
+                    })
+                },
                 (_, _) => panic!("bad formatting data"),
             }
         } else if data.flags.contains(Flags::AUTO_REXW) {
             if op_size == Size::QWORD {
                 rex_w = true;
             } else if op_size != Size::DWORD {
-                return Err(format!("'{}': Does not support 16-bit operands", op.to_string()).into());
+                return Err(Error::UnsupportedOperandInThisMode {
+                    operand: op.to_string(),
+                    op_size,
+                    mode: ctx.mode,
+                    mode_hint: None,
+                });
             }
         } else if data.flags.contains(Flags::AUTO_VEXL) {
             if op_size == Size::HWORD {
@@ -233,7 +251,12 @@ pub(super) fn compile_instruction(ref mut ctx: Context, instruction: Instruction
             // Certain SSE/AVX legacy encoded operations are not available in 32-bit mode
             // as they require a REX.W prefix to be encoded, which is impossible. We catch those cases here
             if ctx.mode == X86Mode::Protected {
-                return Err(format!("'{}': Does not support 64 bit operand size in 32-bit mode", op.to_string()).into())
+                return Err(Error::UnsupportedOperandInThisMode {
+                    operand: op.to_string(),
+                    op_size: Size::QWORD,
+                    mode: X86Mode::Protected,
+                    mode_hint: Some(X86Mode::Long),
+                });
             }
             compile_rex(ctx, rex_w, &reg, &rm)?;
         }
@@ -623,7 +646,7 @@ fn sanitize_indirect(ctx: &mut Context, span: ErrorSpan, nosplit: bool, base: &m
         (&Some((f1, s1)), &Some((f2, s2))) => if f1 == f2 {
             if s1 != s2 {
                 ctx.state.emit_error_at(span, format_args!("Registers of differing sizes"));
-                return Err(Error::UndiagnosedError);
+                return Err(Error::Fatal);
             }
             size = s1;
             family = f1;
@@ -639,7 +662,7 @@ fn sanitize_indirect(ctx: &mut Context, span: ErrorSpan, nosplit: bool, base: &m
             family = f1;
         } else {
             ctx.state.emit_error_at(span, format_args!("Register type combination not supported"));
-            return Err(Error::UndiagnosedError);
+            return Err(Error::Fatal);
         }
     }
     
@@ -647,18 +670,18 @@ fn sanitize_indirect(ctx: &mut Context, span: ErrorSpan, nosplit: bool, base: &m
     match family {
         RegFamily::RIP => if b.is_some() && i.is_some() {
             ctx.state.emit_error_at(span, format_args!("Register type combination not supported"));
-            return Err(Error::UndiagnosedError);
+            return Err(Error::Fatal);
         },
         RegFamily::LEGACY => match size {
             Size::DWORD => (),
             Size::QWORD => (), // only valid in long mode, but should only be possible in long mode
             Size::WORD  => if ctx.mode == X86Mode::Protected || vsib_mode {
                 ctx.state.emit_error_at(span, format_args!("16-bit addressing is not supported in this mode"));
-                return Err(Error::UndiagnosedError);
+                return Err(Error::Fatal);
             },
             _ => {
                 ctx.state.emit_error_at(span, format_args!("Register type not supported"));
-                return Err(Error::UndiagnosedError);
+                return Err(Error::Fatal);
             }
         },
         RegFamily::XMM => if b.is_some() && i.is_some() {
@@ -666,7 +689,7 @@ fn sanitize_indirect(ctx: &mut Context, span: ErrorSpan, nosplit: bool, base: &m
         },
         _ => {
             ctx.state.emit_error_at(span, format_args!("Register type not supported"));
-            return Err(Error::UndiagnosedError);
+            return Err(Error::Fatal);
         }
     }
 
@@ -677,7 +700,7 @@ fn sanitize_indirect(ctx: &mut Context, span: ErrorSpan, nosplit: bool, base: &m
             Some((index, 1, None)) => *base = Some(index),
             Some(_) => {
                 ctx.state.emit_error_at(span, format_args!("RIP cannot be scaled"));
-                return Err(Error::UndiagnosedError);
+                return Err(Error::Fatal);
             },
             None => ()
         }
@@ -704,7 +727,7 @@ fn sanitize_indirect(ctx: &mut Context, span: ErrorSpan, nosplit: bool, base: &m
                 swap(i, base.as_mut().unwrap())
             } else {
                 ctx.state.emit_error_at(span, format_args!("vsib addressing requires a general purpose register as base"));
-                return Err(Error::UndiagnosedError);
+                return Err(Error::Fatal);
             }
         }
 
@@ -720,7 +743,7 @@ fn sanitize_indirect(ctx: &mut Context, span: ErrorSpan, nosplit: bool, base: &m
             None => None,
             Some(_) => {
                 ctx.state.emit_error_at(span, format_args!("16-bit addressing with scaled index"));
-                return Err(Error::UndiagnosedError);
+                return Err(Error::Fatal);
             },
         };
 
@@ -743,7 +766,7 @@ fn sanitize_indirect(ctx: &mut Context, span: ErrorSpan, nosplit: bool, base: &m
             (r, None) if r == &RegId::RBX => RegId::from_number(7),
             _ => {
                 ctx.state.emit_error_at(span, format_args!("Impossible register combination"));
-                return Err(Error::UndiagnosedError);
+                return Err(Error::Fatal);
             }
         };
 
@@ -774,7 +797,7 @@ fn sanitize_indirect(ctx: &mut Context, span: ErrorSpan, nosplit: bool, base: &m
                 *base = Some(i);
             } else {
                 ctx.state.emit_error_at(span, format_args!("'rsp' cannot be used as index field"));
-                return Err(Error::UndiagnosedError);
+                return Err(Error::Fatal);
             }
         } else {
             *index = Some((i, scale, scale_expr))
@@ -798,7 +821,7 @@ fn match_op_format(ctx: &mut Context, span: ErrorSpan, ident: &str, args: &[Clea
         data
     } else {
         ctx.state.emit_error_at(span, format_args!("'{}' is not a valid instruction", name));
-        return Err(Error::UndiagnosedError);
+        return Err(Error::Fatal);
     };
 
     for format in data {
@@ -1099,27 +1122,27 @@ fn get_legacy_prefixes(ctx: &mut Context, fmt: &'static Opdata, idents: Vec<Iden
                 (&mut group1, 0xF3)
             } else {
                 ctx.state.emit_error_at(span, format_args!("Cannot use prefix {} on this instruction", prefix.name));
-                return Err(Error::UndiagnosedError);
+                return Err(Error::Fatal);
             },
             "repe"  |
             "repz"  => if fmt.flags.contains(Flags::REPE) {
                 (&mut group1, 0xF3)
             } else {
                 ctx.state.emit_error_at(span, format_args!("Cannot use prefix {} on this instruction", prefix.name));
-                return Err(Error::UndiagnosedError);
+                return Err(Error::Fatal);
             },
             "repnz" |
             "repne" => if fmt.flags.contains(Flags::REP) {
                 (&mut group1, 0xF2)
             } else {
                 ctx.state.emit_error_at(span, format_args!("Cannot use prefix {} on this instruction", prefix.name));
-                return Err(Error::UndiagnosedError);
+                return Err(Error::Fatal);
             },
             "lock"  => if fmt.flags.contains(Flags::LOCK) {
                 (&mut group1, 0xF0)
             } else {
                 ctx.state.emit_error_at(span, format_args!("Cannot use prefix {} on this instruction", prefix.name));
-                return Err(Error::UndiagnosedError);
+                return Err(Error::Fatal);
             },
             "ss"    => (&mut group2, 0x36),
             "cs"    => (&mut group2, 0x2E),
@@ -1131,7 +1154,7 @@ fn get_legacy_prefixes(ctx: &mut Context, fmt: &'static Opdata, idents: Vec<Iden
         };
         if group.is_some() {
             ctx.state.emit_error_at(span, format_args!("Duplicate prefix group"));
-            return Err(Error::UndiagnosedError);
+            return Err(Error::Fatal);
         }
         *group = Some(value);
     }
@@ -1144,7 +1167,10 @@ fn check_rex(ctx: &Context, fmt: &'static Opdata, args: &[SizedArg], rex_w: bool
     // output arg indicates if a rex prefix can be encoded
     if ctx.mode == X86Mode::Protected {
         if rex_w {
-            return Err("Does not support 64 bit operand size in 32-bit mode".into());
+            return Err(Error::UnsupportedInThisMode {
+                message: "Does not support 64 bit operand size in 32-bit mode".into(),
+                mode_hint: Some(X86Mode::Long),
+            });
         } else {
             return Ok(false);
         }
